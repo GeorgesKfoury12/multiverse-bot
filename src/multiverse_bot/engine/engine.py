@@ -20,8 +20,9 @@ from multiverse_bot.engine.actions import (
 )
 from multiverse_bot.engine.pairing import pair_round
 
-# House default per ADR-0002; lifted into per-Game ruleset config by a later ticket.
+# House defaults per ADR-0002; lifted into per-Game ruleset config by a later ticket.
 _MATCH_POINTS_PER_WIN = 3
+_BYE_GAME_SCORE = (2, 0)
 
 
 class EngineError(Exception):
@@ -280,6 +281,9 @@ class TournamentEngine:
                 f"for round {round_number}"
             )
 
+        seats: list[tuple[str, str | None]] = list(pairing.pairs)
+        if pairing.bye is not None:
+            seats.append((pairing.bye, None))
         matches = [
             Match(
                 match_id=f"{state.tournament_id}-R{round_number}-M{index + 1}",
@@ -287,31 +291,22 @@ class TournamentEngine:
                 player_a=player_a,
                 player_b=player_b,
             )
-            for index, (player_a, player_b) in enumerate(pairing.pairs)
+            for index, (player_a, player_b) in enumerate(seats)
         ]
-        if pairing.bye is not None:
-            matches.append(
-                Match(
-                    match_id=f"{state.tournament_id}-R{round_number}"
-                    f"-M{len(pairing.pairs) + 1}",
-                    round_number=round_number,
-                    player_a=pairing.bye,
-                    player_b=None,
-                )
-            )
         state.rounds[round_number] = matches
         for match in matches:
             state.matches_by_id[match.match_id] = match
-            if match.player_b is None:
-                continue
-            state.opponents[match.player_a].add(match.player_b)
-            state.opponents[match.player_b].add(match.player_a)
-        if pairing.bye is not None:
-            # A Bye scores as a 2-0 win immediately; it never blocks the Round.
-            bye_match_id = matches[-1].match_id
-            state.results_by_match[bye_match_id] = (pairing.bye, 2, 0)
-            state.match_points[pairing.bye] += _MATCH_POINTS_PER_WIN
-            state.byes.add(pairing.bye)
+            if match.is_bye:
+                # A Bye scores as a 2-0 win immediately; it never blocks the Round.
+                state.results_by_match[match.match_id] = (
+                    match.player_a,
+                    *_BYE_GAME_SCORE,
+                )
+                state.match_points[match.player_a] += _MATCH_POINTS_PER_WIN
+                state.byes.add(match.player_a)
+            else:
+                state.opponents[match.player_a].add(match.player_b)
+                state.opponents[match.player_b].add(match.player_a)
 
     @staticmethod
     def _with_result(state: _TournamentState, match: Match) -> Match:
