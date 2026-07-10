@@ -26,8 +26,12 @@ class PlayerRegistered:
 
 @dataclass(frozen=True)
 class TournamentStarted:
+    """``round_count`` is the TO's override; None means the ruleset's standard
+    Swiss count for the player count."""
+
     tournament_id: str
     seed: int
+    round_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -82,8 +86,20 @@ class ResultAssigned:
 
 
 @dataclass(frozen=True)
+class PlayerDropped:
+    """A player leaves the Tournament for good — self-initiated or by the TO
+    (``dropped_by`` records which). They are never paired again; their played
+    Matches keep counting. Irreversible and never retroactive."""
+
+    tournament_id: str
+    player_id: str
+    dropped_by: str
+
+
+@dataclass(frozen=True)
 class TournamentEnded:
-    """The TO ends the Tournament early; Standings-so-far become final."""
+    """The TO ends the Tournament early between Rounds; the untouched current
+    Round is voided and Standings-so-far become final."""
 
     tournament_id: str
 
@@ -96,5 +112,6 @@ Action = (
     | ResultConfirmed
     | ResultDisputed
     | ResultAssigned
+    | PlayerDropped
     | TournamentEnded
 )

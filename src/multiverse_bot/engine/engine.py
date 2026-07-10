@@ -13,6 +13,7 @@ from fractions import Fraction
 
 from multiverse_bot.engine.actions import (
     Action,
+    PlayerDropped,
     PlayerRegistered,
     ResultAssigned,
     ResultConfirmed,
@@ -37,7 +38,11 @@ class EngineError(Exception):
 
 @dataclass(frozen=True)
 class Tournament:
-    """Snapshot of one Tournament, as exposed by queries."""
+    """Snapshot of one Tournament, as exposed by queries.
+
+    ``players`` is everyone who registered; ``dropped`` (in drop order) marks
+    those who have left — they stay in ``players`` and in Standings.
+    """
 
     tournament_id: str
     name: str
@@ -45,6 +50,7 @@ class Tournament:
     players: tuple[str, ...]
     round_count: int | None = None
     current_round: int | None = None
+    dropped: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -141,6 +147,8 @@ class _TournamentState:
     seed: int | None = None
     round_count: int | None = None
     current_round: int | None = None
+    # Drop order, kept as a list so replay reproduces identical snapshots.
+    dropped: list[str] = field(default_factory=list)
     rounds: dict[int, list[Match]] = field(default_factory=dict)
     matches_by_id: dict[str, Match] = field(default_factory=dict)
     results_by_match: dict[str, _MatchResult] = field(default_factory=dict)
@@ -185,13 +193,40 @@ class TournamentEngine:
             raise EngineError(f"{player_id} is already registered in {tournament_id}")
         self._record(PlayerRegistered(tournament_id, player_id))
 
-    def start_tournament(self, tournament_id: str, seed: int) -> None:
+    def start_tournament(
+        self, tournament_id: str, seed: int, round_count: int | None = None
+    ) -> str | None:
+        """Start the Tournament; ``round_count`` overrides the standard Swiss
+        count (spec #1 story 15, ADR-0002).
+
+        Returns a warning — not an error, the schedule is the TO's call — when
+        the override is too short for a sole undefeated winner to be possible.
+        """
         tournament = self._tournament_state(tournament_id)
         if tournament.phase != "registration":
             raise EngineError(f"{tournament_id} has already started")
-        if len(tournament.players) < 2:
+        player_count = len(tournament.players)
+        if player_count < 2:
             raise EngineError(f"{tournament_id} needs at least 2 players to start")
-        self._record(TournamentStarted(tournament_id, seed))
+        warning = None
+        if round_count is not None:
+            # Fresh opponents run out after a round robin: n-1 rounds for an
+            # even field, n with each player Byeing once for an odd one.
+            max_rounds = player_count if player_count % 2 else player_count - 1
+            if not 1 <= round_count <= max_rounds:
+                raise EngineError(
+                    f"round count must be between 1 and {max_rounds} "
+                    f"for {player_count} players"
+                )
+            standard = tournament.ruleset.swiss_round_count(player_count)
+            if round_count < standard:
+                warning = (
+                    f"{round_count} rounds cannot single out an undefeated "
+                    f"winner among {player_count} players; the standard Swiss "
+                    f"count is {standard}"
+                )
+        self._record(TournamentStarted(tournament_id, seed, round_count))
+        return warning
 
     def report_result(
         self,
@@ -292,10 +327,50 @@ class TournamentEngine:
             )
         )
 
-    def end_tournament(self, tournament_id: str) -> None:
+    def drop_player(self, tournament_id: str, player_id: str, dropped_by: str) -> None:
+        """The player leaves the Tournament for good; irreversible.
+
+        Takes effect between Rounds — they are never paired again, but a Match
+        already underway stays on the normal result flow. ``dropped_by`` is
+        the player themselves or the TO; the engine records it but cannot know
+        Discord roles, so the caller routes who may drop whom.
+        """
         tournament = self._tournament_state(tournament_id)
         if tournament.phase != "in_progress":
             raise EngineError(f"{tournament_id} is not in progress")
+        if player_id not in tournament.players:
+            raise EngineError(f"{player_id} is not registered in {tournament_id}")
+        if player_id in tournament.dropped:
+            raise EngineError(f"{player_id} has already dropped from {tournament_id}")
+        if len(tournament.players) - len(tournament.dropped) - 1 < 2:
+            raise EngineError(
+                f"dropping {player_id} would leave {tournament_id} with fewer "
+                f"than 2 players; end the Tournament early instead"
+            )
+        self._record(PlayerDropped(tournament_id, player_id, dropped_by))
+
+    def end_tournament(self, tournament_id: str) -> None:
+        """The TO ends the Tournament early; Standings-so-far become final.
+
+        Legal only between Rounds: the current Round must be untouched (no
+        result activity beyond its pre-confirmed Bye). A Round in progress is
+        force-closed first — Assigned Results for its unfinished Matches — and
+        the next Round pairs automatically; ending then voids that fresh Round
+        as never played.
+        """
+        tournament = self._tournament_state(tournament_id)
+        if tournament.phase != "in_progress":
+            raise EngineError(f"{tournament_id} is not in progress")
+        assert tournament.current_round is not None
+        touched = any(
+            not match.is_bye and match.match_id in tournament.results_by_match
+            for match in tournament.rounds[tournament.current_round]
+        )
+        if touched:
+            raise EngineError(
+                f"round {tournament.current_round} is in progress; force-close "
+                f"it first by assigning results to its unfinished Matches"
+            )
         self._record(TournamentEnded(tournament_id))
 
     # -- queries -----------------------------------------------------------
@@ -309,6 +384,7 @@ class TournamentEngine:
             players=tuple(state.players),
             round_count=state.round_count,
             current_round=state.current_round,
+            dropped=tuple(state.dropped),
         )
 
     def pairings(self, tournament_id: str, round_number: int) -> tuple[Match, ...]:
@@ -373,11 +449,17 @@ class TournamentEngine:
                 self._created_count += 1
             case PlayerRegistered(tournament_id=tournament_id, player_id=player_id):
                 self._tournaments[tournament_id].players.append(player_id)
-            case TournamentStarted(tournament_id=tournament_id, seed=seed):
+            case TournamentStarted(
+                tournament_id=tournament_id, seed=seed, round_count=round_count
+            ):
                 state = self._tournaments[tournament_id]
                 state.phase = "in_progress"
                 state.seed = seed
-                state.round_count = state.ruleset.swiss_round_count(len(state.players))
+                state.round_count = (
+                    round_count
+                    if round_count is not None
+                    else state.ruleset.swiss_round_count(len(state.players))
+                )
                 state.match_points = {player: 0 for player in state.players}
                 state.opponents = {player: set() for player in state.players}
                 self._begin_round(state, 1)
@@ -420,8 +502,12 @@ class TournamentEngine:
                 )
                 self._recompute_match_points(state)
                 self._advance_if_round_complete(state)
+            case PlayerDropped(tournament_id=tournament_id, player_id=player_id):
+                self._tournaments[tournament_id].dropped.append(player_id)
             case TournamentEnded(tournament_id=tournament_id):
-                self._tournaments[tournament_id].phase = "completed"
+                state = self._tournaments[tournament_id]
+                self._void_current_round(state)
+                state.phase = "completed"
 
     def _advance_if_round_complete(self, state: _TournamentState) -> None:
         assert state.current_round is not None and state.round_count is not None
@@ -435,6 +521,27 @@ class TournamentEngine:
         else:
             self._begin_round(state, state.current_round + 1)
 
+    def _void_current_round(self, state: _TournamentState) -> None:
+        """Unwind the freshly paired Round an early end declares never played.
+
+        Its Matches (and the pre-confirmed Bye) leave every derived structure,
+        so Standings-so-far are exactly the completed Rounds' results.
+        """
+        assert state.current_round is not None
+        voided = state.rounds.pop(state.current_round)
+        for match in voided:
+            del state.matches_by_id[match.match_id]
+            state.results_by_match.pop(match.match_id, None)
+            if match.is_bye:
+                state.byes.discard(match.player_a)
+            else:
+                state.opponents[match.player_a].discard(match.player_b)
+                state.opponents[match.player_b].discard(match.player_a)
+        state.current_round = (
+            state.current_round - 1 if state.current_round > 1 else None
+        )
+        self._recompute_match_points(state)
+
     def _begin_round(self, state: _TournamentState, round_number: int) -> None:
         state.current_round = round_number
         rng = random.Random(f"{state.seed}:{round_number}")
@@ -442,8 +549,11 @@ class TournamentEngine:
         # Score Groups from most points down, random order within each group;
         # pair_round pairs within groups where possible, minimizes pair-downs,
         # never repeats an opponent, and grants the Bye on odd counts.
+        # Dropped players are simply out of the pool (never paired again).
         by_points: dict[int, list[str]] = {}
         for player in state.players:
+            if player in state.dropped:
+                continue
             by_points.setdefault(state.match_points[player], []).append(player)
         groups: list[list[str]] = []
         for points in sorted(by_points, reverse=True):
@@ -453,9 +563,10 @@ class TournamentEngine:
 
         pairing = pair_round(groups, state.opponents, state.byes)
         if pairing is None:
-            # Unreachable while opponents come only from Swiss rounds of this
-            # engine (ceil(log2 n) rounds always admit a rematch-free pairing);
-            # kept as a hard stop so a future bug can't silently pair a rematch.
+            # Unreachable at the standard Swiss count (ceil(log2 n) rounds
+            # always admit a rematch-free pairing), but a TO round-count
+            # override past it can exhaust legal pairings in adversarial
+            # histories; the hard stop keeps a rematch from slipping through.
             raise EngineError(
                 f"{state.tournament_id} has no rematch-free pairing "
                 f"for round {round_number}"

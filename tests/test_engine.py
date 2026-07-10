@@ -344,17 +344,27 @@ def test_ending_early_freezes_standings_so_far() -> None:
     report_and_confirm(
         engine, tournament_id, first, winner=first.player_a, games_won=2, games_lost=0
     )
+    # Round 1 is in progress, so the TO force-closes it (Assigned Result for
+    # the unfinished Match) and ends at the top of the untouched Round 2.
+    engine.assign_result(
+        tournament_id,
+        second.match_id,
+        assigned_by="georges-to",
+        winner=second.player_a,
+        games_won=2,
+        games_lost=0,
+    )
 
     engine.end_tournament(tournament_id)
 
     assert engine.tournament(tournament_id).phase == "completed"
-    assert [row.match_points for row in engine.standings(tournament_id)] == [3, 0, 0, 0]
+    assert [row.match_points for row in engine.standings(tournament_id)] == [3, 3, 0, 0]
     with pytest.raises(EngineError):
         engine.report_result(
             tournament_id,
-            second.match_id,
-            reported_by=second.player_a,
-            winner=second.player_a,
+            first.match_id,
+            reported_by=first.player_a,
+            winner=first.player_a,
             games_won=2,
             games_lost=0,
         )
