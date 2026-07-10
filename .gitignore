@@ -10,6 +10,9 @@ dist/
 # Secrets
 .env
 
+# Local tournament data (SQLite action log)
+*.db
+
 # Machine-local config
 .envrc
 .claude/settings.local.json
