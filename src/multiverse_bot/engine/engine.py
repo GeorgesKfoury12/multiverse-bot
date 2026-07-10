@@ -22,6 +22,7 @@ from multiverse_bot.engine.actions import (
     ResultConfirmed,
     ResultDisputed,
     ResultReported,
+    RoundReopened,
     TournamentCreated,
     TournamentEnded,
     TournamentStarted,
@@ -51,6 +52,8 @@ class Tournament:
 
     ``players`` is everyone who registered; ``dropped`` (in drop order) marks
     those who have left — they stay in ``players`` and in Standings.
+    ``ended_early`` marks a completed Tournament the TO ended (its last Round
+    voided, not closed on results) — the one completion a reopen cannot undo.
     """
 
     tournament_id: str
@@ -60,6 +63,7 @@ class Tournament:
     round_count: int | None = None
     current_round: int | None = None
     dropped: tuple[str, ...] = ()
+    ended_early: bool = False
 
 
 @dataclass(frozen=True)
@@ -159,6 +163,7 @@ class _TournamentState:
     current_round: int | None = None
     # Drop order, kept as a list so replay reproduces identical snapshots.
     dropped: list[str] = field(default_factory=list)
+    ended_early: bool = False
     rounds: dict[int, list[Match]] = field(default_factory=dict)
     matches_by_id: dict[str, Match] = field(default_factory=dict)
     results_by_match: dict[str, _MatchResult] = field(default_factory=dict)
@@ -433,6 +438,45 @@ class TournamentEngine:
             )
         self._record(TournamentEnded(tournament_id))
 
+    def reopen_round(self, tournament_id: str, reopened_by: str) -> None:
+        """The TO reopens the most recently closed Round to correct a result
+        (issue #17) — the correction window a Round-closing confirmation
+        would otherwise shut in the same instant.
+
+        Reopening reverts the freshly paired next Round's Pairings, discarding
+        any Pending or Disputed reports in them — or un-completes the
+        Tournament when the final Round's last confirmation completed it.
+        Refused once the next Round has a confirmed result (its pre-confirmed
+        Bye does not count). The reopened Round then takes corrections on the
+        normal flow and re-closes on its own, regenerating the next Round's
+        Pairings from the corrected results.
+
+        The engine records ``reopened_by`` but cannot know Discord roles; the
+        caller is responsible for only routing TOs here.
+        """
+        tournament = self._tournament_state(tournament_id)
+        if tournament.phase == "completed":
+            if tournament.ended_early:
+                raise EngineError(
+                    f"{tournament_id} was ended early — its last Round was "
+                    "voided, not closed on results; there is nothing to reopen"
+                )
+        elif tournament.phase == "in_progress":
+            assert tournament.current_round is not None
+            if tournament.current_round == 1:
+                raise EngineError(f"no Round of {tournament_id} has closed yet")
+            if any(
+                not match.is_bye and self._is_confirmed(tournament, match.match_id)
+                for match in tournament.rounds[tournament.current_round]
+            ):
+                raise EngineError(
+                    f"round {tournament.current_round} already has a confirmed "
+                    f"result; round {tournament.current_round - 1} stays closed"
+                )
+        else:
+            raise EngineError(f"{tournament_id} has no closed Round to reopen")
+        self._record(RoundReopened(tournament_id, reopened_by))
+
     # -- queries -----------------------------------------------------------
 
     def tournaments(self) -> tuple[Tournament, ...]:
@@ -452,6 +496,7 @@ class TournamentEngine:
             round_count=state.round_count,
             current_round=state.current_round,
             dropped=tuple(state.dropped),
+            ended_early=state.ended_early,
         )
 
     def players_missing_decks(self, tournament_id: str) -> tuple[str, ...]:
@@ -635,6 +680,16 @@ class TournamentEngine:
                 state = self._tournaments[tournament_id]
                 self._void_current_round(state)
                 state.phase = "completed"
+                state.ended_early = True
+            case RoundReopened(tournament_id=tournament_id):
+                state = self._tournaments[tournament_id]
+                if state.phase == "completed":
+                    # The final Round's Matches are all still in place — the
+                    # Round simply stops being closed, and the completion
+                    # re-fires when its results are all confirmed again.
+                    state.phase = "in_progress"
+                else:
+                    self._void_current_round(state)
 
     def _advance_if_round_complete(self, state: _TournamentState) -> None:
         assert state.current_round is not None and state.round_count is not None
@@ -649,7 +704,9 @@ class TournamentEngine:
             self._begin_round(state, state.current_round + 1)
 
     def _void_current_round(self, state: _TournamentState) -> None:
-        """Unwind the freshly paired Round an early end declares never played.
+        """Unwind the freshly paired current Round — an early end declares it
+        never played; a reopen reverts it so the previous Round can take
+        corrections.
 
         Its Matches (and the pre-confirmed Bye) leave every derived structure,
         so Standings-so-far are exactly the completed Rounds' results.
@@ -659,11 +716,18 @@ class TournamentEngine:
         for match in voided:
             del state.matches_by_id[match.match_id]
             state.results_by_match.pop(match.match_id, None)
-            if match.is_bye:
-                state.byes.discard(match.player_a)
-            else:
+            if not match.is_bye:
                 state.opponents[match.player_a].discard(match.player_b)
                 state.opponents[match.player_b].discard(match.player_a)
+        # Byes are recomputed rather than discarded: a player can hold one in
+        # more than one Round when unavoidable, and re-pairing after a reopen
+        # must still see the earlier one.
+        state.byes = {
+            match.player_a
+            for matches in state.rounds.values()
+            for match in matches
+            if match.is_bye
+        }
         state.current_round = (
             state.current_round - 1 if state.current_round > 1 else None
         )

@@ -112,6 +112,19 @@ class ResultAssigned:
 
 
 @dataclass(frozen=True)
+class RoundReopened:
+    """The TO reopens the most recently closed Round to correct a mistaken
+    confirm (issue #17): the freshly paired next Round's Pairings are reverted
+    (discarding any reports already in them), or the Tournament un-completes
+    if the final Round's last confirmation closed it. Refused once the next
+    Round has a confirmed result. The correction then re-closes the Round,
+    regenerating the next Round's Pairings."""
+
+    tournament_id: str
+    reopened_by: str
+
+
+@dataclass(frozen=True)
 class PlayerDropped:
     """A player leaves the Tournament for good — self-initiated or by the TO
     (``dropped_by`` records which). They are never paired again; their played
@@ -141,6 +154,7 @@ Action = (
     | ResultConfirmed
     | ResultDisputed
     | ResultAssigned
+    | RoundReopened
     | PlayerDropped
     | TournamentEnded
 )

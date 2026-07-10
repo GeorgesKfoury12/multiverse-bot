@@ -17,7 +17,7 @@ A month-long league made up of weekly Tournaments. Players earn points toward th
 _Avoid_: season (until the community uses it)
 
 **Round**:
-One step of a Swiss Tournament, lasting about a day. Pairings are published, paired players schedule and play their Match within the round. A Round closes automatically when all results are in, or when the TO force-closes it.
+One step of a Swiss Tournament, lasting about a day. Pairings are published, paired players schedule and play their Match within the round. A Round closes automatically when all results are in, or when the TO force-closes it. The TO can reopen the most recently closed Round to correct a mistaken result — reverting the next Round's Pairings (or un-completing the Tournament after the final Round), allowed only while the next Round has no confirmed results; the correction re-closes the Round and regenerates the Pairings.
 
 **Tournament Organizer (TO)**:
 The human running a Tournament. Policy calls stay with the TO, not the bot: resolving unplayed Matches, force-closing Rounds, and ending a Tournament early.
@@ -30,7 +30,7 @@ The list a player locks in for a whole Tournament, submitted privately to the bo
 Decks are Sealed (visible only to their owner and the TO) until the Tournament starts, then Revealed to everyone at once — Tournaments are open-decklist. A Tournament cannot start while a registered player has no Deck; the TO resolves stragglers (chase or drop).
 
 **Reported Result**:
-A Match result submitted by either player as winner + game score (e.g. "Georges won 2-1"). It is Pending until the opponent confirms or disputes it; the TO can confirm, correct, or replace it any time before the Round closes. Frozen once the Round closes.
+A Match result submitted by either player as winner + game score (e.g. "Georges won 2-1"). It is Pending until the opponent confirms or disputes it; the TO can confirm, correct, or replace it any time before the Round closes. Frozen once the Round closes, unless the TO reopens the Round.
 
 **Pending**:
 The state of a Reported Result awaiting opponent confirmation. A Round cannot auto-advance while any result is Pending.

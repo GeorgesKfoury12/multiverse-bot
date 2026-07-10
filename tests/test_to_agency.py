@@ -236,6 +236,222 @@ def test_round_count_override_must_fit_the_player_count() -> None:
     assert engine.tournament(tournament_id).phase == "registration"
 
 
+def test_reopening_reverts_the_next_rounds_pairings() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    confirm_round(engine, tournament_id, round_number=1)
+    assert engine.tournament(tournament_id).current_round == 2
+
+    engine.reopen_round(tournament_id, reopened_by="georges-to")
+
+    tournament = engine.tournament(tournament_id)
+    assert tournament.phase == "in_progress"
+    assert tournament.current_round == 1
+    with pytest.raises(EngineError):
+        engine.pairings(tournament_id, round_number=2)
+    # Round 1's confirmed results are intact — and correctable again.
+    statuses = {m.status for m in engine.pairings(tournament_id, round_number=1)}
+    assert statuses == {"confirmed"}
+
+
+def test_a_corrected_result_recloses_the_round_with_fresh_pairings() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    confirm_round(engine, tournament_id, round_number=1)
+    first, second = engine.pairings(tournament_id, round_number=1)
+    engine.reopen_round(tournament_id, reopened_by="georges-to")
+
+    # The mistaken confirm flips: player_b actually won the first Match.
+    engine.assign_result(
+        tournament_id,
+        first.match_id,
+        assigned_by="georges-to",
+        winner=first.player_b,
+        games_won=2,
+        games_lost=1,
+    )
+
+    # The correction re-closes the Round, and Round 2's regenerated Pairings
+    # seat the corrected winners together.
+    assert engine.tournament(tournament_id).current_round == 2
+    points = {
+        row.player_id: row.match_points for row in engine.standings(tournament_id)
+    }
+    assert points[first.player_b] == 3
+    assert points[first.player_a] == 0
+    (winners_match,) = [
+        m
+        for m in engine.pairings(tournament_id, round_number=2)
+        if first.player_b in (m.player_a, m.player_b)
+    ]
+    assert {winners_match.player_a, winners_match.player_b} == {
+        first.player_b,
+        second.player_a,
+    }
+
+
+def test_reopening_the_final_round_uncompletes_the_tournament() -> None:
+    """Issue #17's core case: the deciding Match's mistaken confirm completed
+    the Tournament in the same instant, leaving no correction window at all."""
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    confirm_round(engine, tournament_id, round_number=1)
+    confirm_round(engine, tournament_id, round_number=2)
+    assert engine.tournament(tournament_id).phase == "completed"
+
+    engine.reopen_round(tournament_id, reopened_by="georges-to")
+
+    tournament = engine.tournament(tournament_id)
+    assert tournament.phase == "in_progress"
+    assert tournament.current_round == 2
+    # The deciding result is correctable again; the correction re-completes.
+    leader = engine.standings(tournament_id)[0].player_id
+    (decider,) = [
+        m
+        for m in engine.pairings(tournament_id, round_number=2)
+        if leader in (m.player_a, m.player_b)
+    ]
+    assert decider.player_b is not None
+    corrected_winner = (
+        decider.player_b if leader == decider.player_a else decider.player_a
+    )
+    engine.assign_result(
+        tournament_id,
+        decider.match_id,
+        assigned_by="georges-to",
+        winner=corrected_winner,
+        games_won=2,
+        games_lost=1,
+    )
+    assert engine.tournament(tournament_id).phase == "completed"
+    assert engine.standings(tournament_id)[0].player_id == corrected_winner
+
+
+def test_reopening_is_refused_once_the_next_round_has_a_confirmed_result() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    confirm_round(engine, tournament_id, round_number=1)
+    underway = engine.pairings(tournament_id, round_number=2)[0]
+    report_and_confirm(
+        engine,
+        tournament_id,
+        underway,
+        winner=underway.player_a,
+        games_won=2,
+        games_lost=0,
+    )
+
+    with pytest.raises(EngineError, match="confirmed"):
+        engine.reopen_round(tournament_id, reopened_by="georges-to")
+
+
+def test_reclosing_with_the_same_results_regenerates_identical_pairings() -> None:
+    """The next Round's Bye comes pre-confirmed; it must not block reopening —
+    and re-closing on unchanged results reproduces the identical Pairings
+    (same seed, same Score Groups), Bye included."""
+    engine = TournamentEngine()
+    tournament_id = start_five_player_tournament(engine)
+    confirm_round(engine, tournament_id, round_number=1)
+    before = engine.pairings(tournament_id, round_number=2)
+
+    engine.reopen_round(tournament_id, reopened_by="georges-to")
+    # Re-assign one Round 1 result unchanged: the Round re-closes as it was.
+    replayed = [
+        m for m in engine.pairings(tournament_id, round_number=1) if not m.is_bye
+    ][0]
+    engine.assign_result(
+        tournament_id,
+        replayed.match_id,
+        assigned_by="georges-to",
+        winner=replayed.winner,
+        games_won=2,
+        games_lost=0,
+    )
+
+    assert engine.tournament(tournament_id).current_round == 2
+    assert engine.pairings(tournament_id, round_number=2) == before
+
+
+def test_reopening_discards_the_next_rounds_pending_reports() -> None:
+    """Per the triage decision, only a confirmed result blocks reopening: a
+    Pending report in the reverted Round is discarded with its Pairings."""
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    confirm_round(engine, tournament_id, round_number=1)
+    reported = engine.pairings(tournament_id, round_number=2)[0]
+    engine.report_result(
+        tournament_id,
+        reported.match_id,
+        reported_by=reported.player_a,
+        winner=reported.player_a,
+        games_won=2,
+        games_lost=0,
+    )
+
+    engine.reopen_round(tournament_id, reopened_by="georges-to")
+    unchanged = [
+        m for m in engine.pairings(tournament_id, round_number=1) if not m.is_bye
+    ][0]
+    engine.assign_result(
+        tournament_id,
+        unchanged.match_id,
+        assigned_by="georges-to",
+        winner=unchanged.winner,
+        games_won=2,
+        games_lost=0,
+    )
+
+    statuses = {m.status for m in engine.pairings(tournament_id, round_number=2)}
+    assert statuses == {"awaiting_report"}
+
+
+def test_reopen_guard_rails() -> None:
+    engine = TournamentEngine()
+    tournament_id = create_tournament_with_players(engine, FIVE_PLAYERS)
+
+    # Nothing to reopen before the start.
+    with pytest.raises(EngineError):
+        engine.reopen_round(tournament_id, reopened_by="georges-to")
+
+    # Round 1 open means no Round has closed yet.
+    engine.start_tournament(tournament_id, seed=42)
+    with pytest.raises(EngineError, match="closed"):
+        engine.reopen_round(tournament_id, reopened_by="georges-to")
+
+    # An early end voids the current Round rather than closing it on results;
+    # reopening after one is refused.
+    confirm_round(engine, tournament_id, round_number=1)
+    engine.end_tournament(tournament_id)
+    with pytest.raises(EngineError, match="ended early"):
+        engine.reopen_round(tournament_id, reopened_by="georges-to")
+
+
+def test_replaying_a_history_with_reopens_is_identical() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    confirm_round(engine, tournament_id, round_number=1)
+    engine.reopen_round(tournament_id, reopened_by="georges-to")
+    corrected = engine.pairings(tournament_id, round_number=1)[0]
+    engine.assign_result(
+        tournament_id,
+        corrected.match_id,
+        assigned_by="georges-to",
+        winner=corrected.player_b,
+        games_won=2,
+        games_lost=0,
+    )
+    confirm_round(engine, tournament_id, round_number=2)
+    engine.reopen_round(tournament_id, reopened_by="georges-to")
+
+    replayed = TournamentEngine.replay(engine.history)
+
+    assert replayed.history == engine.history
+    assert replayed.tournament(tournament_id) == engine.tournament(tournament_id)
+    assert replayed.standings(tournament_id) == engine.standings(tournament_id)
+    assert replayed.pairings(tournament_id, 1) == engine.pairings(tournament_id, 1)
+    assert replayed.pairings(tournament_id, 2) == engine.pairings(tournament_id, 2)
+
+
 def test_replaying_a_history_with_drop_override_and_early_end_is_identical() -> None:
     engine = TournamentEngine()
     tournament_id = create_tournament_with_players(engine, FIVE_PLAYERS)

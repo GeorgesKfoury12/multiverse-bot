@@ -124,6 +124,16 @@ class BindingsStore:
         )
         self._connection.commit()
 
+    def delete_match_thread(self, match_id: str) -> None:
+        """Forget a Match's thread — its Round was reopened and the Pairings
+        reverted (issue #17), so re-closing must open fresh threads rather
+        than reuse ones whose Pairings may have changed."""
+        self._connection.execute(
+            "DELETE FROM match_threads WHERE match_id = ?",
+            (match_id,),
+        )
+        self._connection.commit()
+
     def match_thread(self, match_id: str) -> int | None:
         row = self._connection.execute(
             "SELECT thread_id FROM match_threads WHERE match_id = ?",
