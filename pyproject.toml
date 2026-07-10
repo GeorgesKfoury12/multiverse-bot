@@ -1,0 +1,26 @@
+[project]
+name = "multiverse-bot"
+version = "0.1.0"
+description = "Discord bot for running online Swiss TCG tournaments: pairings, standings, and match tracking"
+readme = "README.md"
+authors = [
+    { name = "Georges Kfoury", email = "georgeskfoury12x@icloud.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "discord-py>=2.7.1",
+    "python-dotenv>=1.2.2",
+]
+
+[project.scripts]
+multiverse-bot = "multiverse_bot:main"
+
+[build-system]
+requires = ["uv_build>=0.10.12,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.15.21",
+]
