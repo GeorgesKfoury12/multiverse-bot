@@ -7,7 +7,7 @@ seed recorded in the history, never from ambient entropy.
 """
 
 import random
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 
@@ -160,17 +160,30 @@ class _TournamentState:
 
 
 class TournamentEngine:
-    def __init__(self) -> None:
+    def __init__(self, sink: Callable[[Action], None] | None = None) -> None:
+        """``sink`` observes each action the moment it is recorded — the hook
+        persistence attaches to. The engine itself stays pure: the callable is
+        opaque to it, and replay never feeds a sink."""
         self._history: list[Action] = []
         self._tournaments: dict[str, _TournamentState] = {}
         self._created_count = 0
+        self._sink = sink
 
     @classmethod
-    def replay(cls, history: tuple[Action, ...]) -> "TournamentEngine":
-        """Rebuild an engine from a recorded history; state comes out identical."""
+    def replay(
+        cls,
+        history: tuple[Action, ...],
+        sink: Callable[[Action], None] | None = None,
+    ) -> "TournamentEngine":
+        """Rebuild an engine from a recorded history; state comes out identical.
+
+        ``sink`` is attached only after the replay, so it sees new actions but
+        never the ones it (typically) supplied.
+        """
         engine = cls()
         for action in history:
             engine._record(action)
+        engine._sink = sink
         return engine
 
     @property
@@ -483,6 +496,8 @@ class TournamentEngine:
     def _record(self, action: Action) -> None:
         self._apply(action)
         self._history.append(action)
+        if self._sink is not None:
+            self._sink(action)
 
     def _apply(self, action: Action) -> None:
         match action:
