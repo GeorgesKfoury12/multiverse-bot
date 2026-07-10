@@ -1,5 +1,5 @@
 """Discord adapter: slash commands and buttons in, engine calls out
-(tickets #9, #10, #11).
+(tickets #9, #10, #11, #12).
 
 Thin by design (spec #1): every command translates one-to-one into an engine
 command or query, TO authorization is one configured Discord role, and the
@@ -16,6 +16,7 @@ import io
 import os
 import random
 import re
+from collections.abc import Callable, Iterable
 
 import discord
 from discord import app_commands
@@ -225,6 +226,78 @@ def open_match_for_thread(
     return open_match_by_id(engine, match_id)
 
 
+def result_phrase(match: Match) -> str:
+    """A Match's result as one sentence fragment — the wording every surface
+    shares (the scores channel, the TO's thread replies, the force-close
+    walk-through). The Match must carry result fields."""
+    assert match.games_won is not None
+    assert match.games_lost is not None and match.games_drawn is not None
+    score = format_score(match.games_won, match.games_lost, match.games_drawn)
+    if match.winner is None:
+        return f"<@{match.player_a}> and <@{match.player_b}> drew {score}"
+    loser = match.player_b if match.winner == match.player_a else match.player_a
+    return f"<@{match.winner}> beat <@{loser}> {score}"
+
+
+def unfinished_match_lines(
+    matches: Iterable[Match], thread_for: Callable[[str], int | None]
+) -> list[str]:
+    """The force-close walk-through: one line per unfinished Match saying who
+    plays, where (its thread, or the Match ID if none is on file), and where
+    the result stands — so the TO can see at a glance what each ruling needs."""
+    lines = []
+    for match in matches:
+        thread_id = thread_for(match.match_id)
+        where = f"<#{thread_id}>" if thread_id is not None else match.match_id
+        if match.status == "awaiting_report":
+            standing = "no report yet"
+        else:
+            flag = "Pending" if match.status == "pending" else "Disputed"
+            standing = f"{flag} — {result_phrase(match)}, per <@{match.reported_by}>"
+        lines.append(
+            f"- <@{match.player_a}> vs <@{match.player_b}> in {where} — {standing}"
+        )
+    return lines
+
+
+def unfinished_matches(
+    engine: TournamentEngine, tournament: Tournament
+) -> tuple[Match, ...]:
+    """The current Round's Matches still without a confirmed result — what a
+    force-close walks the TO through. A Bye never appears: it comes
+    pre-confirmed."""
+    assert tournament.current_round is not None
+    return tuple(
+        match
+        for match in engine.pairings(tournament.tournament_id, tournament.current_round)
+        if match.status != "confirmed"
+    )
+
+
+def require_between_rounds(engine: TournamentEngine, tournament: Tournament) -> None:
+    """End-early is offered only between Rounds (spec #1): refuse while the
+    current Round has any result activity beyond its pre-confirmed Bye,
+    directing the TO to force-close first — the same line the engine holds,
+    said with the way forward."""
+    assert tournament.current_round is not None
+    pairings = engine.pairings(tournament.tournament_id, tournament.current_round)
+    if any(not m.is_bye and m.status != "awaiting_report" for m in pairings):
+        raise CommandError(
+            f"Round {tournament.current_round} is in progress — force-close it "
+            "first with `/tournament force-close`, then end early."
+        )
+
+
+def require_current_round(tournament: Tournament, round_number: int) -> None:
+    """Refuse a confirmation click whose preview described an earlier Round:
+    the situation the TO signed off on no longer exists."""
+    if tournament.current_round != round_number:
+        raise CommandError(
+            f"Round {round_number} has moved on since that confirmation was "
+            "offered; run the command again for the current state"
+        )
+
+
 def _percent(value: Fraction) -> str:
     return f"{float(value):.1%}"
 
@@ -283,9 +356,9 @@ class MultiverseBot(commands.Bot):
         _install_commands(self)
 
     async def setup_hook(self) -> None:
-        # Confirm/Dispute buttons are matched by custom_id, so the ones on
-        # messages posted before a restart keep working.
-        self.add_dynamic_items(PendingResultButton)
+        # Buttons are matched by custom_id, so the ones on messages posted
+        # before a restart keep working.
+        self.add_dynamic_items(PendingResultButton, TOConfirmButton)
         if self.guild_id is not None:
             # Guild-scoped sync is instant; global sync can take an hour.
             guild = discord.Object(self.guild_id)
@@ -296,6 +369,13 @@ class MultiverseBot(commands.Bot):
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (id: {self.user.id})", flush=True)
+
+    def member_is_to(self, user: discord.abc.User) -> bool:
+        """Whether the user holds the configured TO role — the one
+        authorization gate, shared by the command check and the TO
+        confirmation buttons."""
+        roles = getattr(user, "roles", ())
+        return any(role.id == self.to_role_id for role in roles)
 
     def presented_deck(
         self, tournament_id: str, player_id: str, deck: str
@@ -419,21 +499,17 @@ async def announce_reveal(bot: MultiverseBot, tournament_id: str) -> None:
 
 
 async def announce_result(
-    bot: MultiverseBot, tournament: Tournament, match: Match
+    bot: MultiverseBot, tournament: Tournament, match: Match, corrected: bool = False
 ) -> None:
     """Announce one confirmed result in the bound scores channel, keeping the
-    community's at-a-glance record in sync (spec #1 story 18)."""
+    community's at-a-glance record in sync (spec #1 story 18). ``corrected``
+    marks a TO replacement of a result this channel already announced, so the
+    record contradicts itself out loud rather than silently."""
     channel = await bound_channel(bot, tournament.tournament_id, "scores")
-    assert match.games_won is not None
-    assert match.games_lost is not None and match.games_drawn is not None
-    score = format_score(match.games_won, match.games_lost, match.games_drawn)
-    if match.winner is None:
-        headline = f"<@{match.player_a}> and <@{match.player_b}> drew {score}"
-    else:
-        loser = match.player_b if match.winner == match.player_a else match.player_a
-        headline = f"<@{match.winner}> beat <@{loser}> {score}"
+    note = " (corrected by the TO)" if corrected else ""
     await channel.send(
-        f"⚔️ **{tournament.name}** Round {match.round_number}: {headline}",
+        f"⚔️ **{tournament.name}** Round {match.round_number}: "
+        f"{result_phrase(match)}{note}",
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
@@ -475,6 +551,60 @@ async def advance_announcements(
     elif tournament.current_round != round_before:
         await announce_standings(bot, tournament_id)
         await announce_pairings(bot, tournament_id)
+
+
+async def announce_confirmed_result(
+    bot: MultiverseBot,
+    interaction: discord.Interaction,
+    tournament: Tournament,
+    match_id: str,
+    round_before: int,
+    corrected: bool = False,
+) -> None:
+    """The result is in the engine; announce it — and whatever Round close it
+    triggered — without dying silently if a channel post fails, since the
+    result itself already stuck. Shared by everything that lands a confirmed
+    result: the confirm button, and the TO's confirm/assign (ticket #12)."""
+    try:
+        confirmed = _match_in_round(
+            bot.engine, tournament.tournament_id, round_before, match_id
+        )
+        assert confirmed is not None
+        await announce_result(bot, tournament, confirmed, corrected=corrected)
+        await advance_announcements(bot, tournament.tournament_id, round_before)
+    except (EngineError, CommandError, discord.HTTPException) as error:
+        await interaction.followup.send(
+            f"The result is recorded, but announcing it failed: {error}\n"
+            "A TO can re-post with `/tournament post-standings` and "
+            "`/tournament post-pairings`."
+        )
+
+
+async def start_and_announce(
+    bot: MultiverseBot,
+    interaction: discord.Interaction,
+    target: Tournament,
+    rounds: int | None,
+) -> None:
+    """Start the Tournament and roll out its opening posts — the Reveal, the
+    Round 1 Pairings, and the public started announcement. Shared by the
+    direct start and the confirmed short-schedule start (ticket #12); the
+    interaction must already be acknowledged, the rollout being several
+    Discord round-trips."""
+    warning = bot.engine.start_tournament(
+        target.tournament_id, seed=random.randrange(2**63), round_count=rounds
+    )
+    await announce_reveal(bot, target.tournament_id)
+    await announce_pairings(bot, target.tournament_id)
+    started = bot.engine.tournament(target.tournament_id)
+    lines = [
+        f"**{target.name}** ({target.tournament_id}) has started: "
+        f"{len(started.players)} players, {started.round_count} Rounds. "
+        "Decks are Revealed and Round 1 Pairings are up!"
+    ]
+    if warning is not None:
+        lines.append(f"⚠️ {warning}")
+    await interaction.followup.send("\n".join(lines))
 
 
 # The two one-click reactions to a Pending result (spec #1 story 17).
@@ -584,35 +714,11 @@ class PendingResultButton(
             view=None,
         )
         if self.verb == "confirm":
-            await self._announce_confirmation(
-                bot, interaction, tournament, round_before
+            await announce_confirmed_result(
+                bot, interaction, tournament, self.match_id, round_before
             )
         else:
             await self._flag_dispute_to_to(bot, interaction)
-
-    async def _announce_confirmation(
-        self,
-        bot: "MultiverseBot",
-        interaction: discord.Interaction,
-        tournament: Tournament,
-        round_before: int,
-    ) -> None:
-        """The confirmed result is in the engine; announce it — and whatever
-        Round close it triggered — without dying silently if a channel post
-        fails, since the confirmation itself already stuck."""
-        try:
-            confirmed = _match_in_round(
-                bot.engine, tournament.tournament_id, round_before, self.match_id
-            )
-            assert confirmed is not None
-            await announce_result(bot, tournament, confirmed)
-            await advance_announcements(bot, tournament.tournament_id, round_before)
-        except (EngineError, CommandError, discord.HTTPException) as error:
-            await interaction.followup.send(
-                f"The result is confirmed, but announcing it failed: {error}\n"
-                "A TO can re-post with `/tournament post-standings` and "
-                "`/tournament post-pairings`."
-            )
 
     async def _flag_dispute_to_to(
         self, bot: "MultiverseBot", interaction: discord.Interaction
@@ -633,12 +739,207 @@ class PendingResultButton(
         )
 
 
+_TO_CONFIRM_TEMPLATE = (
+    r"multiverse:to-(?P<operation>start|drop|forceclose|end):"
+    r"(?P<tournament_id>[^:]+):(?P<argument>[^:]+)"
+)
+
+
+class TOConfirmButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=_TO_CONFIRM_TEMPLATE,
+):
+    """The explicit confirmation step in front of a destructive TO operation
+    (ticket #12): a short-schedule start, a Drop, a force-close, an early end.
+    The slash command posts an ephemeral preview of exactly what will happen;
+    only this button fires it.
+
+    Like the confirm/Dispute buttons, everything lives in the custom_id so a
+    click works across restarts: ``argument`` is the round count (start), the
+    player (drop), or the Round the preview described (forceclose/end) —
+    Round-scoped clicks are refused once the Round has moved on, so the button
+    never acts on a situation the TO did not sign off."""
+
+    def __init__(
+        self, operation: str, tournament_id: str, argument: str, label: str = "Confirm"
+    ) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.danger,
+                custom_id=f"multiverse:to-{operation}:{tournament_id}:{argument}",
+            )
+        )
+        self.operation = operation
+        self.tournament_id = tournament_id
+        self.argument = argument
+
+    @classmethod
+    async def from_custom_id(
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: "re.Match[str]",
+    ) -> "TOConfirmButton":
+        # The label is not reconstructed: the posted message still renders the
+        # original button; this instance only handles the click.
+        return cls(match["operation"], match["tournament_id"], match["argument"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        assert isinstance(bot, MultiverseBot)
+        operations = {
+            "start": self._start,
+            "drop": self._drop,
+            "forceclose": self._force_close,
+            "end": self._end,
+        }
+        try:
+            # The preview is ephemeral (invoker-only), but roles can change
+            # between the preview and the click; re-check.
+            if not bot.member_is_to(interaction.user):
+                raise CommandError("this confirmation is reserved for the TO role")
+            await operations[self.operation](bot, interaction)
+        except (EngineError, CommandError) as error:
+            if interaction.response.is_done():
+                await interaction.followup.send(str(error), ephemeral=True)
+            else:
+                await interaction.response.send_message(str(error), ephemeral=True)
+
+    def _in_progress_tournament(self, engine: TournamentEngine) -> Tournament:
+        tournament = engine.tournament(self.tournament_id)
+        if tournament.phase != "in_progress":
+            raise CommandError(f"**{tournament.name}** is not in progress")
+        return tournament
+
+    async def _start(
+        self, bot: MultiverseBot, interaction: discord.Interaction
+    ) -> None:
+        """The TO accepts the short-schedule warning; start for real (spec #1
+        story 15: warn, then obey)."""
+        tournament = bot.engine.tournament(self.tournament_id)
+        if tournament.phase not in _STARTABLE:
+            raise CommandError(f"**{tournament.name}** has already started")
+        require_decks(bot.engine, tournament)
+        await interaction.response.edit_message(
+            content=f"Starting **{tournament.name}** with {self.argument} Rounds…",
+            view=None,
+        )
+        await start_and_announce(bot, interaction, tournament, int(self.argument))
+
+    async def _drop(self, bot: MultiverseBot, interaction: discord.Interaction) -> None:
+        tournament = self._in_progress_tournament(bot.engine)
+        bot.engine.drop_player(
+            self.tournament_id, self.argument, dropped_by=str(interaction.user.id)
+        )
+        await interaction.response.edit_message(
+            content=f"<@{self.argument}> is dropped from **{tournament.name}**.",
+            view=None,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        try:
+            channel = await bound_channel(bot, self.tournament_id, "pairings")
+            await channel.send(
+                f"🚪 <@{self.argument}> has dropped from **{tournament.name}** "
+                "(TO decision). They are not paired from here on; their played "
+                "Matches still count and they keep their place in Standings.",
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False,
+                    roles=False,
+                    users=[discord.Object(int(self.argument))],
+                ),
+            )
+        except (CommandError, discord.HTTPException) as error:
+            await interaction.followup.send(
+                f"The Drop is recorded, but announcing it failed: {error}",
+                ephemeral=True,
+            )
+
+    async def _force_close(
+        self, bot: MultiverseBot, interaction: discord.Interaction
+    ) -> None:
+        """Kick off the walk-through: announce the force-close, then hand the
+        TO the per-Match checklist. Each ruling is its own explicit action in
+        the Match thread; the Round closes itself when the last result lands
+        (ADR-0001: the bot makes the calls cheap, not for the TO)."""
+        tournament = self._in_progress_tournament(bot.engine)
+        require_current_round(tournament, int(self.argument))
+        remaining = unfinished_matches(bot.engine, tournament)
+        if not remaining:
+            raise CommandError(
+                f"Round {tournament.current_round} has no unfinished Matches left"
+            )
+        lines = unfinished_match_lines(remaining, bot.bindings_store.match_thread)
+        await interaction.response.edit_message(
+            content=(
+                f"Force-closing Round {tournament.current_round} of "
+                f"**{tournament.name}**. In each Match thread below, "
+                "`/tournament assign-result` — or `/tournament confirm-result` "
+                "to accept a Pending report as it stands:\n"
+                + "\n".join(lines)
+                + "\nThe Round closes itself the moment the last result lands."
+            ),
+            view=None,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        try:
+            channel = await bound_channel(bot, self.tournament_id, "pairings")
+            await channel.send(
+                f"⚖️ The TO is force-closing Round {tournament.current_round} of "
+                f"**{tournament.name}** — these Matches are getting TO rulings:\n"
+                + "\n".join(lines),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except (CommandError, discord.HTTPException) as error:
+            await interaction.followup.send(
+                f"The walk-through is above, but announcing the force-close "
+                f"failed: {error}",
+                ephemeral=True,
+            )
+
+    async def _end(self, bot: MultiverseBot, interaction: discord.Interaction) -> None:
+        tournament = self._in_progress_tournament(bot.engine)
+        require_current_round(tournament, int(self.argument))
+        voided = tournament.current_round
+        # The engine re-checks that the Round is untouched; a report that
+        # landed since the preview refuses the end instead of voiding it.
+        bot.engine.end_tournament(self.tournament_id)
+        await interaction.response.edit_message(
+            content=f"**{tournament.name}** is ended; Standings-so-far are final.",
+            view=None,
+        )
+        try:
+            channel = await bound_channel(bot, self.tournament_id, "pairings")
+            await channel.send(
+                f"🏁 The TO has ended **{tournament.name}** early — Round "
+                f"{voided}'s Pairings are void, and the Standings so far are "
+                "final.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            await announce_standings(bot, self.tournament_id)
+        except (CommandError, discord.HTTPException) as error:
+            await interaction.followup.send(
+                f"The Tournament is ended, but announcing it failed: {error}\n"
+                "A TO can re-post with `/tournament post-standings`.",
+                ephemeral=True,
+            )
+
+
+def to_confirmation(
+    operation: str, tournament_id: str, argument: str, label: str
+) -> discord.ui.View:
+    """An ephemeral preview's single confirm button — the only way a
+    destructive TO operation fires."""
+    view = discord.ui.View(timeout=None)
+    view.add_item(TOConfirmButton(operation, tournament_id, argument, label))
+    return view
+
+
 def _install_commands(bot: MultiverseBot) -> None:
     engine = bot.engine
 
     def is_to(interaction: discord.Interaction) -> bool:
-        roles = getattr(interaction.user, "roles", ())
-        return any(role.id == bot.to_role_id for role in roles)
+        return bot.member_is_to(interaction.user)
 
     tournament_group = app_commands.Group(
         name="tournament",
@@ -731,22 +1032,31 @@ def _install_commands(bot: MultiverseBot) -> None:
         # The friendly face of the engine's own gate: refuse with mentions,
         # before deferring, so the TO gets their chase list ephemerally.
         require_decks(engine, target)
+        if rounds is not None:
+            # A start is irreversible (Decks Reveal, Pairings post), so a
+            # schedule too short for a sole undefeated winner warns *before*
+            # starting; the engine's own warning only comes after. The
+            # schedule stays the TO's call — confirm and it obeys (ticket #12).
+            standard = engine.standard_round_count(target.tournament_id)
+            if rounds < standard:
+                plural = "" if rounds == 1 else "s"
+                await interaction.response.send_message(
+                    f"⚠️ {rounds} Round{plural} cannot single out an undefeated "
+                    f"winner among {len(target.players)} players; the standard "
+                    f"Swiss count is {standard}.\n"
+                    "The schedule is yours to call — start anyway?",
+                    view=to_confirmation(
+                        "start",
+                        target.tournament_id,
+                        str(rounds),
+                        f"Start with {rounds} Round{plural}",
+                    ),
+                    ephemeral=True,
+                )
+                return
         # The Reveal and a thread per Match are a Discord round-trip each.
         await interaction.response.defer()
-        warning = engine.start_tournament(
-            target.tournament_id, seed=random.randrange(2**63), round_count=rounds
-        )
-        await announce_reveal(bot, target.tournament_id)
-        await announce_pairings(bot, target.tournament_id)
-        started = engine.tournament(target.tournament_id)
-        lines = [
-            f"**{target.name}** ({target.tournament_id}) has started: "
-            f"{len(started.players)} players, {started.round_count} Rounds. "
-            "Decks are Revealed and Round 1 Pairings are up!"
-        ]
-        if warning is not None:
-            lines.append(f"⚠️ {warning}")
-        await interaction.followup.send("\n".join(lines))
+        await start_and_announce(bot, interaction, target, rounds)
 
     @tournament_group.command(
         name="post-pairings",
@@ -841,6 +1151,216 @@ def _install_commands(bot: MultiverseBot) -> None:
         await announce_reveal(bot, target.tournament_id)
         await interaction.followup.send(
             f"The Deck Reveal for **{target.name}** is re-posted."
+        )
+
+    def player_mentions(match: Match) -> discord.AllowedMentions:
+        """Ping exactly the Match's players — a TO ruling should reach them."""
+        players = (match.player_a, match.player_b)
+        return discord.AllowedMentions(
+            everyone=False,
+            roles=False,
+            users=[discord.Object(int(p)) for p in players if p is not None],
+        )
+
+    @tournament_group.command(
+        name="confirm-result",
+        description="Confirm this Match's reported result as the TO",
+    )
+    @app_commands.check(is_to)
+    async def confirm_result(interaction: discord.Interaction) -> None:
+        """The TO confirms a Pending or Disputed result as reported — ruling a
+        Dispute in the reporter's favor, or unsticking an unresponsive
+        opponent (ticket #12). Used in the Match thread, like `/report`."""
+        target, match = open_match_for_thread(
+            engine, bot.bindings_store, interaction.channel_id
+        )
+        round_before = target.current_round
+        assert round_before is not None
+        engine.confirm_result_as_to(
+            target.tournament_id, match.match_id, actor=str(interaction.user.id)
+        )
+        await interaction.response.send_message(
+            f"✅ The TO confirmed the reported result: {result_phrase(match)}.",
+            allowed_mentions=player_mentions(match),
+        )
+        await announce_confirmed_result(
+            bot, interaction, target, match.match_id, round_before
+        )
+
+    @tournament_group.command(
+        name="assign-result",
+        description="Set or correct this Match's result by TO ruling",
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(
+        score="Game score, winner's count first: 2-0, 2-1, or 1-1-1 for a draw",
+        winner="Who won the Match; leave empty for a draw",
+    )
+    async def assign_result(
+        interaction: discord.Interaction,
+        score: str,
+        winner: discord.Member | None = None,
+    ) -> None:
+        """The TO sets the Match's result by fiat — no-shows, Dispute rulings,
+        corrections — replacing whatever was there, until the Round closes
+        (ticket #12). Used in the Match thread; an Assigned Result counts
+        identically to a reported one."""
+        target, match = open_match_for_thread(
+            engine, bot.bindings_store, interaction.channel_id
+        )
+        round_before = target.current_round
+        assert round_before is not None
+        corrected = match.status == "confirmed"
+        games_won, games_lost, games_drawn = parse_score(score)
+        engine.assign_result(
+            target.tournament_id,
+            match.match_id,
+            assigned_by=str(interaction.user.id),
+            winner=str(winner.id) if winner is not None else None,
+            games_won=games_won,
+            games_lost=games_lost,
+            games_drawn=games_drawn,
+        )
+        assigned = _match_in_round(
+            engine, target.tournament_id, round_before, match.match_id
+        )
+        assert assigned is not None
+        note = " (replacing the confirmed result)" if corrected else ""
+        await interaction.response.send_message(
+            f"⚖️ The TO set this Match's result{note}: {result_phrase(assigned)}.",
+            allowed_mentions=player_mentions(match),
+        )
+        await announce_confirmed_result(
+            bot, interaction, target, match.match_id, round_before, corrected=corrected
+        )
+
+    @tournament_group.command(
+        name="force-close",
+        description="Close the current Round by ruling on its unfinished Matches",
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(tournament="Tournament ID or name; defaults if unique")
+    async def force_close(
+        interaction: discord.Interaction, tournament: str | None = None
+    ) -> None:
+        """Preview + confirm: the flow walks the TO through a ruling per
+        unfinished Match, and the Round closes itself when the last result
+        lands (ticket #12; ADR-0001 — every ruling stays the TO's)."""
+        target = resolve_tournament(engine, tournament, _IN_PROGRESS, "in progress")
+        remaining = unfinished_matches(engine, target)
+        if not remaining:
+            raise CommandError(
+                f"Round {target.current_round} has no unfinished Matches; "
+                "it closes on its own"
+            )
+        count = len(remaining)
+        need = "1 Match still needs" if count == 1 else f"{count} Matches still need"
+        await interaction.response.send_message(
+            f"Force-close Round {target.current_round} of **{target.name}**? "
+            f"{need} a result:\n"
+            + "\n".join(
+                unfinished_match_lines(remaining, bot.bindings_store.match_thread)
+            )
+            + "\nConfirming announces the force-close and hands you the "
+            "walk-through; every ruling stays yours.",
+            view=to_confirmation(
+                "forceclose",
+                target.tournament_id,
+                str(target.current_round),
+                f"Force-close Round {target.current_round}",
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @tournament_group.command(
+        description="Drop a player from the Tournament (permanent)"
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(
+        player="Who to drop",
+        tournament="Tournament ID or name; defaults if unique",
+    )
+    async def drop(
+        interaction: discord.Interaction,
+        player: discord.Member,
+        tournament: str | None = None,
+    ) -> None:
+        """Preview + confirm: the TO-initiated Drop, e.g. for unresponsiveness
+        (ticket #12). Permanent — never paired again, played Matches keep
+        counting, place in Standings kept."""
+        target = resolve_tournament(engine, tournament, _IN_PROGRESS, "in progress")
+        player_id = str(player.id)
+        # The engine holds the same lines; saying them here keeps the preview
+        # honest and the refusals in mention form rather than raw IDs.
+        if player_id not in target.players:
+            raise CommandError(
+                f"{player.mention} is not registered in **{target.name}**"
+            )
+        if player_id in target.dropped:
+            raise CommandError(
+                f"{player.mention} has already dropped from **{target.name}**"
+            )
+        if len(target.players) - len(target.dropped) - 1 < 2:
+            raise CommandError(
+                f"dropping {player.mention} would leave **{target.name}** with "
+                "fewer than 2 players — end the Tournament early instead "
+                "(`/tournament end-early`)"
+            )
+        lines = [
+            f"Drop {player.mention} from **{target.name}**? This is permanent: "
+            "they are never paired again; their played Matches still count and "
+            "they keep their place in Standings."
+        ]
+        if any(
+            player_id in (m.player_a, m.player_b)
+            for m in unfinished_matches(engine, target)
+        ):
+            lines.append(
+                f"Their Round {target.current_round} Match is still unfinished — "
+                "it stays on the normal result flow (report/confirm, or "
+                "`/tournament assign-result` in its thread)."
+            )
+        await interaction.response.send_message(
+            "\n".join(lines),
+            view=to_confirmation(
+                "drop", target.tournament_id, player_id, f"Drop {player.display_name}"
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @tournament_group.command(
+        name="end-early",
+        description="End the Tournament between Rounds; Standings become final",
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(tournament="Tournament ID or name; defaults if unique")
+    async def end_early(
+        interaction: discord.Interaction, tournament: str | None = None
+    ) -> None:
+        """Preview + confirm: offered only between Rounds — the untouched
+        current Round is voided as never played; mid-Round the TO is directed
+        to force-close first (ticket #12, spec #1 story 24)."""
+        target = resolve_tournament(engine, tournament, _IN_PROGRESS, "in progress")
+        require_between_rounds(engine, target)
+        assert target.current_round is not None
+        if target.current_round == 1:
+            outcome = "No Round has completed, so the final Standings are a flat tie."
+        else:
+            outcome = (
+                f"The Standings after Round {target.current_round - 1} become final."
+            )
+        await interaction.response.send_message(
+            f"End **{target.name}** early? Round {target.current_round}'s "
+            f"Pairings are voided as never played. {outcome}",
+            view=to_confirmation(
+                "end",
+                target.tournament_id,
+                str(target.current_round),
+                "End the Tournament",
+            ),
+            ephemeral=True,
         )
 
     @bot.tree.command(description="Sign up for a Tournament")

@@ -461,6 +461,14 @@ class TournamentEngine:
         state = self._tournament_state(tournament_id)
         return tuple(p for p in state.players if p not in state.decks)
 
+    def standard_round_count(self, tournament_id: str) -> int:
+        """The ruleset's standard Swiss count for the current player count —
+        what a TO's round-count override at start is measured against, exposed
+        so callers can warn about a short schedule before committing the
+        start (``start_tournament`` itself only warns after)."""
+        state = self._tournament_state(tournament_id)
+        return state.ruleset.swiss_round_count(len(state.players))
+
     def deck(self, tournament_id: str, player_id: str, requested_by: str) -> str:
         """The player's Deck, as a player sees it: Sealed until the Tournament
         starts (owner-only), Revealed to anyone afterwards (open decklist)."""

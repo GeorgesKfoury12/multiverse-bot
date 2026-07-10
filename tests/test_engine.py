@@ -12,6 +12,7 @@ import sys
 import pytest
 from conftest import (
     PLAYERS,
+    create_tournament_with_players,
     register_with_deck,
     report_and_confirm,
     start_four_player_tournament,
@@ -58,6 +59,16 @@ def test_start_computes_swiss_round_count_and_pairs_round_one() -> None:
         player for match in pairings for player in (match.player_a, match.player_b)
     }
     assert paired == set(PLAYERS)
+
+
+def test_standard_round_count_is_queryable_before_the_start() -> None:
+    """The start command warns about a short round-count override *before*
+    starting (ticket #12), so the standard count must be readable while the
+    Tournament is still startable."""
+    engine = TournamentEngine()
+    tournament_id = create_tournament_with_players(engine)  # 4 players
+
+    assert engine.standard_round_count(tournament_id) == 2  # ceil(log2(4))
 
 
 def test_same_seed_reproduces_identical_pairings() -> None:
