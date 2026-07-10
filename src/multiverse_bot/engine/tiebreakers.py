@@ -70,5 +70,7 @@ def _opponents_average(
 ) -> Fraction:
     if not matches:
         return Fraction(0)
+    # Averages per Match, which equals per-opponent only while pairing
+    # guarantees no rematches — dedupe by opponent if that ever relaxes.
     floored = [max(rates[r.opponent], floor) for r in matches]
     return sum(floored, Fraction(0)) / len(floored)

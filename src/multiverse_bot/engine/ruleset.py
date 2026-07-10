@@ -1,10 +1,16 @@
 """Per-Game ruleset configuration (ADR-0002).
 
-The engine is game-agnostic: every house-policy value — match points,
-Tiebreaker floor, Bye scoring, the Swiss round table — lives here, keyed by
-Game in ``RULESETS``. The field defaults are the ADR-0002 house policy
-(MTG-derived); Riftbound uses them unmodified. Adding another TCG means
-registering another ``Ruleset``, not touching the engine.
+The engine is game-agnostic: house-policy values — match points, Tiebreaker
+floor, Bye scoring — live here as fields, keyed by Game in ``RULESETS``; the
+Swiss round table is the shared house default, overridable per Game by
+subclassing. The field defaults are the ADR-0002 house policy (MTG-derived);
+Riftbound uses them unmodified. Adding another TCG means registering another
+``Ruleset``, not touching the engine.
+
+Still to come from later tickets: the TO round-count override at start
+(ADR-0002 / spec #1 story 15), and how a drawn game counts once results can
+express draws (``match_points_draw`` is already policy; GW% draw counting
+is not).
 
 Histories record only the Game's name (in ``TournamentCreated``), so replay
 resolves the ruleset through ``RULESETS``.
