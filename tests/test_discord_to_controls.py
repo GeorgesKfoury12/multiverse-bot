@@ -354,6 +354,7 @@ def test_a_reopen_click_is_refused_once_it_would_reopen_a_different_round() -> N
     [
         ("start", "2"),
         ("drop", "123456789"),
+        ("unregister", "123456789"),
         ("forceclose", "3"),
         ("end", "3"),
         ("reopen", "2"),

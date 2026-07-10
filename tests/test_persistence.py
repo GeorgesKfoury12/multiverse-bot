@@ -39,6 +39,29 @@ def test_registration_phase_state_survives_a_restart(tmp_path: Path) -> None:
     assert reloaded.deck(tournament_id, "alice", requested_by="alice") == DECK
 
 
+def test_an_unregistered_player_stays_gone_after_a_restart(tmp_path: Path) -> None:
+    """The registration-phase unregister (issue #20) round-trips: the player
+    and their Deck are still gone on reload, and the start stays unblocked."""
+    db = tmp_path / "tournaments.db"
+    engine = open_engine(db)
+    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
+    for player in ("alice", "bob"):
+        register_with_deck(engine, tournament_id, player)
+    engine.register_player(tournament_id, "ghost")
+    engine.close_registration(tournament_id)
+    engine.unregister_player(tournament_id, "ghost", unregistered_by="the-to")
+
+    reloaded = open_engine(db)
+
+    assert reloaded.history == engine.history
+    assert reloaded.tournament(tournament_id) == engine.tournament(tournament_id)
+    assert reloaded.tournament(tournament_id).players == ("alice", "bob")
+    assert reloaded.players_missing_decks(tournament_id) == ()
+    with pytest.raises(EngineError, match="no Deck"):
+        reloaded.deck_as_to(tournament_id, "ghost")
+
+
 def test_replaying_the_stored_history_yields_identical_state(tmp_path: Path) -> None:
     """The stored history feeds the engine's own replay and comes out equal."""
     db = tmp_path / "tournaments.db"

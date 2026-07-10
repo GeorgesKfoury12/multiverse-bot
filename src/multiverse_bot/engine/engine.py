@@ -16,6 +16,7 @@ from multiverse_bot.engine.actions import (
     DeckSubmitted,
     PlayerDropped,
     PlayerRegistered,
+    PlayerUnregistered,
     RegistrationClosed,
     RegistrationOpened,
     ResultAssigned,
@@ -239,6 +240,26 @@ class TournamentEngine:
         if player_id in tournament.players:
             raise EngineError(f"{player_id} is already registered in {tournament_id}")
         self._record(PlayerRegistered(tournament_id, player_id))
+
+    def unregister_player(
+        self, tournament_id: str, player_id: str, unregistered_by: str
+    ) -> None:
+        """The player leaves the sign-up list before the start (issue #20) —
+        the TO's remedy for a deck-less straggler blocking the start, and a
+        player's own way out of a Tournament they will not play. They leave
+        the roster entirely, Deck and all; re-registering starts fresh.
+        ``unregistered_by`` is the player themselves or the TO; the engine
+        records it but cannot know Discord roles, so the caller routes who
+        may unregister whom.
+        """
+        tournament = self._tournament_state(tournament_id)
+        if tournament.phase not in _PRE_START_PHASES:
+            raise EngineError(
+                f"{tournament_id} has started; leaving now is a Drop, not an unregister"
+            )
+        if player_id not in tournament.players:
+            raise EngineError(f"{player_id} is not registered in {tournament_id}")
+        self._record(PlayerUnregistered(tournament_id, player_id, unregistered_by))
 
     def submit_deck(self, tournament_id: str, player_id: str, deck: str) -> None:
         """The player locks in their Deck; resubmitting before the start
@@ -617,6 +638,10 @@ class TournamentEngine:
                 self._tournaments[tournament_id].phase = "registration_closed"
             case PlayerRegistered(tournament_id=tournament_id, player_id=player_id):
                 self._tournaments[tournament_id].players.append(player_id)
+            case PlayerUnregistered(tournament_id=tournament_id, player_id=player_id):
+                state = self._tournaments[tournament_id]
+                state.players.remove(player_id)
+                state.decks.pop(player_id, None)
             case DeckSubmitted(
                 tournament_id=tournament_id, player_id=player_id, deck=deck
             ):
