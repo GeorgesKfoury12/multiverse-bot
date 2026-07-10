@@ -6,6 +6,7 @@ verbatim, unparsed.
 """
 
 import pytest
+from conftest import register_with_deck
 
 from multiverse_bot.engine import EngineError, TournamentEngine
 
@@ -74,8 +75,9 @@ def test_start_is_refused_naming_exactly_the_players_missing_a_deck() -> None:
     assert "alice" not in message and "carol" not in message
     assert engine.tournament(tournament_id).phase == "registration"
 
-    # The stragglers resolved (submitted or dropped from registration is the
-    # TO's call; here they submit), the gate opens.
+    # Once the stragglers submit, the gate opens. (Chasing is the TO's only
+    # remedy today: a Drop needs an in-progress Tournament, so there is no
+    # engine action yet to shed a deck-less registrant.)
     engine.submit_deck(tournament_id, "bob", DECK)
     engine.submit_deck(tournament_id, "dave", DECK)
     engine.start_tournament(tournament_id, seed=42)
@@ -86,30 +88,28 @@ def test_start_reveals_every_deck_to_everyone_at_once() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in ("alice", "bob"):
-        engine.register_player(tournament_id, player_id)
-        engine.submit_deck(tournament_id, player_id, f"{player_id}'s list")
+        register_with_deck(engine, tournament_id, player_id)
 
     engine.start_tournament(tournament_id, seed=42)
 
     # Open decklist: opponents and spectators alike read any Deck.
     for viewer in ("alice", "bob", "spectator"):
-        assert engine.deck(tournament_id, "alice", requested_by=viewer) == (
-            "alice's list"
-        )
-        assert engine.deck(tournament_id, "bob", requested_by=viewer) == "bob's list"
+        for player_id in ("alice", "bob"):
+            assert engine.deck(tournament_id, player_id, requested_by=viewer) == (
+                f"{player_id}'s decklist"
+            )
 
 
 def test_decks_are_immutable_once_the_tournament_starts() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in ("alice", "bob"):
-        engine.register_player(tournament_id, player_id)
-        engine.submit_deck(tournament_id, player_id, f"{player_id}'s list")
+        register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
 
     with pytest.raises(EngineError):
         engine.submit_deck(tournament_id, "alice", "sneaky post-reveal edit")
-    assert engine.deck(tournament_id, "alice", requested_by="bob") == "alice's list"
+    assert engine.deck(tournament_id, "alice", requested_by="bob") == "alice's decklist"
 
 
 def test_querying_a_player_who_never_submitted_says_so() -> None:
