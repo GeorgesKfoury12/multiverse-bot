@@ -496,8 +496,19 @@ class TournamentEngine:
     def _record(self, action: Action) -> None:
         self._apply(action)
         self._history.append(action)
-        if self._sink is not None:
+        if self._sink is None:
+            return
+        try:
             self._sink(action)
+        except BaseException:
+            # A rejected persist must not leave memory ahead of disk: unwind
+            # the action by rebuilding from the still-persisted history, so
+            # the command fails cleanly and can simply be retried.
+            self._history.pop()
+            rebuilt = TournamentEngine.replay(tuple(self._history))
+            self._tournaments = rebuilt._tournaments
+            self._created_count = rebuilt._created_count
+            raise
 
     def _apply(self, action: Action) -> None:
         match action:
