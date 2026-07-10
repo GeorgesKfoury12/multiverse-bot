@@ -27,10 +27,14 @@ class CommandError(Exception):
 
 
 # Which phases a command applies to, for defaulting to "the only active
-# Tournament" (ticket #9) without making the TO name it every time.
+# Tournament" (ticket #9) without making the TO name it every time. Both a
+# still-open and a closed signup window take Decks and can start ("setup"
+# cannot: nobody is registered yet).
 _AWAITING_OPEN = ("setup", "registration_closed")
 _SIGNUP_OPEN = ("registration",)
-_PRE_START = ("registration", "registration_closed")
+_ACCEPTING_DECKS = ("registration", "registration_closed")
+_STARTABLE = ("registration", "registration_closed")
+_IN_PROGRESS = ("in_progress",)
 
 
 def resolve_tournament(
@@ -100,6 +104,9 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
 
     Shared seam for every Round: ``/tournament start`` posts Round 1 here, and
     the result flow (ticket #10) will call it as confirmations close Rounds.
+    Safe to re-run (``/tournament post-pairings``): Matches whose thread is
+    already on file keep it, so a crash mid-announcement is recoverable
+    without duplicate threads.
     """
     engine = bot.engine
     tournament = engine.tournament(tournament_id)
@@ -137,14 +144,21 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
             )
         else:
             lines.append(f"{index}. <@{match.player_a}> vs <@{match.player_b}>")
-    # The channel post lists, the Match threads ping: mentions stay silent here.
+    # The channel post lists, the Match threads ping — except byed players,
+    # whose only notification is this post, so their mention stays live.
+    byed = [discord.Object(int(m.player_a)) for m in matches if m.is_bye]
     await channel.send(
-        "\n".join(lines), allowed_mentions=discord.AllowedMentions.none()
+        "\n".join(lines),
+        allowed_mentions=discord.AllowedMentions(
+            everyone=False, roles=False, users=byed
+        ),
     )
 
     for match in matches:
         if match.is_bye:
             continue
+        if bot.bindings_store.match_thread(match.match_id) is not None:
+            continue  # already announced before a crash or re-post
         assert match.player_b is not None
         versus = (
             f"{await display_name(match.player_a)} vs "
@@ -255,7 +269,7 @@ def _install_commands(bot: MultiverseBot) -> None:
         tournament: str | None = None,
         rounds: app_commands.Range[int, 1] | None = None,
     ) -> None:
-        target = resolve_tournament(engine, tournament, _PRE_START, "ready to start")
+        target = resolve_tournament(engine, tournament, _STARTABLE, "ready to start")
         # Opening a thread per Match is a Discord round-trip each; buy time.
         await interaction.response.defer()
         warning = engine.start_tournament(
@@ -271,6 +285,26 @@ def _install_commands(bot: MultiverseBot) -> None:
         if warning is not None:
             lines.append(f"⚠️ {warning}")
         await interaction.followup.send("\n".join(lines))
+
+    @tournament_group.command(
+        name="post-pairings",
+        description="Re-post the current Round's Pairings (recovery)",
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(tournament="Tournament ID or name; defaults if unique")
+    async def post_pairings(
+        interaction: discord.Interaction, tournament: str | None = None
+    ) -> None:
+        """Recovery for a crash between a Round beginning and its announcement
+        finishing: lists the Pairings again and opens only the Match threads
+        still missing (existing ones are kept, not duplicated)."""
+        target = resolve_tournament(engine, tournament, _IN_PROGRESS, "in progress")
+        await interaction.response.defer()
+        await announce_pairings(bot, target.tournament_id)
+        await interaction.followup.send(
+            f"Round {engine.tournament(target.tournament_id).current_round} "
+            f"Pairings for **{target.name}** are re-posted."
+        )
 
     @bot.tree.command(description="Sign up for a Tournament")
     @app_commands.guild_only()
@@ -301,7 +335,9 @@ def _install_commands(bot: MultiverseBot) -> None:
     async def submit_deck(
         interaction: discord.Interaction, deck: str, tournament: str | None = None
     ) -> None:
-        target = resolve_tournament(engine, tournament, _PRE_START, "accepting Decks")
+        target = resolve_tournament(
+            engine, tournament, _ACCEPTING_DECKS, "accepting Decks"
+        )
         engine.submit_deck(target.tournament_id, str(interaction.user.id), deck)
         # Ephemeral: a Sealed submission leaves no channel-history trace.
         await interaction.response.send_message(
