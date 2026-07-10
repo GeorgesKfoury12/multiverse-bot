@@ -103,6 +103,15 @@ def format_score(games_won: int, games_lost: int, games_drawn: int) -> str:
     return f"{games_won}-{games_lost}"
 
 
+def _match_in_round(
+    engine: TournamentEngine, tournament_id: str, round_number: int, match_id: str
+) -> Match | None:
+    for match in engine.pairings(tournament_id, round_number):
+        if match.match_id == match_id:
+            return match
+    return None
+
+
 def open_match_by_id(
     engine: TournamentEngine, match_id: str
 ) -> tuple[Tournament, Match]:
@@ -114,11 +123,11 @@ def open_match_by_id(
         if tournament.phase != "in_progress":
             continue
         assert tournament.current_round is not None
-        for match in engine.pairings(
-            tournament.tournament_id, tournament.current_round
-        ):
-            if match.match_id == match_id:
-                return tournament, match
+        match = _match_in_round(
+            engine, tournament.tournament_id, tournament.current_round, match_id
+        )
+        if match is not None:
+            return tournament, match
     raise CommandError(f"{match_id} is not in an open Round; its result is frozen")
 
 
@@ -192,7 +201,7 @@ class MultiverseBot(commands.Bot):
     async def setup_hook(self) -> None:
         # Confirm/Dispute buttons are matched by custom_id, so the ones on
         # messages posted before a restart keep working.
-        self.add_dynamic_items(ConfirmResultButton, DisputeResultButton)
+        self.add_dynamic_items(PendingResultButton)
         if self.guild_id is not None:
             # Guild-scoped sync is instant; global sync can take an hour.
             guild = discord.Object(self.guild_id)
@@ -350,22 +359,51 @@ async def advance_announcements(
         await announce_pairings(bot, tournament_id)
 
 
-class ConfirmResultButton(
-    discord.ui.DynamicItem[discord.ui.Button],
-    template=r"multiverse:confirm:(?P<match_id>[A-Za-z0-9-]+)",
-):
-    """The opponent's one-click confirm, pinned to its Match by custom_id so
-    it keeps working across bot restarts (spec #1 story 17)."""
+# The two one-click reactions to a Pending result (spec #1 story 17).
+_PENDING_RESULT_ACTIONS = {
+    "confirm": ("Confirm", discord.ButtonStyle.success),
+    "dispute": ("Dispute", discord.ButtonStyle.danger),
+}
 
-    def __init__(self, match_id: str) -> None:
+
+class PendingResultButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    # Player IDs are opaque engine strings (Discord snowflakes in production),
+    # so the ID fields accept anything colon-free.
+    template=(
+        r"multiverse:(?P<verb>confirm|dispute):(?P<match_id>[A-Za-z0-9-]+):"
+        r"(?P<reported_by>[^:]+):(?P<winner>[^:]+):(?P<score>\d+-\d+-\d+)"
+    ),
+):
+    """The opponent's one-click confirm or Dispute of a Pending result.
+
+    Everything lives in the custom_id — the Match *and* the report's content
+    (reporter, winner, score) — so the button keeps working across bot
+    restarts with no adapter state, and a click on a message whose report has
+    since been replaced is refused instead of acting on a result the clicker
+    never saw.
+    """
+
+    def __init__(
+        self, verb: str, match_id: str, reported_by: str, winner: str, score: str
+    ) -> None:
+        """``winner`` is the winning player's ID or ``"draw"``; ``score`` is
+        always the three-part ``won-lost-drawn`` form."""
+        label, style = _PENDING_RESULT_ACTIONS[verb]
         super().__init__(
             discord.ui.Button(
-                label="Confirm",
-                style=discord.ButtonStyle.success,
-                custom_id=f"multiverse:confirm:{match_id}",
+                label=label,
+                style=style,
+                custom_id=(
+                    f"multiverse:{verb}:{match_id}:{reported_by}:{winner}:{score}"
+                ),
             )
         )
+        self.verb = verb
         self.match_id = match_id
+        self.reported_by = reported_by
+        self.winner = winner
+        self.score = score
 
     @classmethod
     async def from_custom_id(
@@ -373,96 +411,102 @@ class ConfirmResultButton(
         interaction: discord.Interaction,
         item: discord.ui.Button,
         match: "re.Match[str]",
-    ) -> "ConfirmResultButton":
-        return cls(match["match_id"])
+    ) -> "PendingResultButton":
+        return cls(
+            match["verb"],
+            match["match_id"],
+            match["reported_by"],
+            match["winner"],
+            match["score"],
+        )
+
+    def reported_match(self, engine: TournamentEngine) -> tuple[Tournament, Match]:
+        """The button's Match, provided its live report is still the one this
+        button was posted under."""
+        tournament, match = open_match_by_id(engine, self.match_id)
+        current = (
+            match.reported_by,
+            match.winner if match.winner is not None else "draw",
+            f"{match.games_won}-{match.games_lost}-{match.games_drawn}",
+        )
+        if current != (self.reported_by, self.winner, self.score):
+            raise CommandError(
+                "that report has been replaced — use the buttons under the "
+                "latest report"
+            )
+        return tournament, match
 
     async def callback(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
         assert isinstance(bot, MultiverseBot)
+        actor = str(interaction.user.id)
         try:
-            tournament, _ = open_match_by_id(bot.engine, self.match_id)
+            tournament, _ = self.reported_match(bot.engine)
             round_before = tournament.current_round
-            bot.engine.confirm_result(
-                tournament.tournament_id,
-                self.match_id,
-                confirmed_by=str(interaction.user.id),
-            )
+            assert round_before is not None
+            if self.verb == "confirm":
+                bot.engine.confirm_result(
+                    tournament.tournament_id, self.match_id, confirmed_by=actor
+                )
+            else:
+                bot.engine.dispute_result(
+                    tournament.tournament_id, self.match_id, disputed_by=actor
+                )
         except (EngineError, CommandError) as error:
             await interaction.response.send_message(str(error), ephemeral=True)
             return
         # Acknowledge in the thread first — the channel posts below each cost
         # a Discord round-trip and the interaction token is on a clock.
+        mark = "✅ Confirmed" if self.verb == "confirm" else "⚠️ Disputed"
         assert interaction.message is not None
         await interaction.response.edit_message(
             content=(
-                f"{interaction.message.content}\n"
-                f"✅ Confirmed by {interaction.user.mention}."
+                f"{interaction.message.content}\n{mark} by {interaction.user.mention}."
             ),
             view=None,
         )
-        assert round_before is not None
-        confirmed = next(
-            m
-            for m in bot.engine.pairings(tournament.tournament_id, round_before)
-            if m.match_id == self.match_id
-        )
-        await announce_result(bot, tournament, confirmed)
-        await advance_announcements(bot, tournament.tournament_id, round_before)
-
-
-class DisputeResultButton(
-    discord.ui.DynamicItem[discord.ui.Button],
-    template=r"multiverse:dispute:(?P<match_id>[A-Za-z0-9-]+)",
-):
-    """The opponent's one-click Dispute: flags the Match and pings the TO with
-    the Match thread as context (spec #1 story 19)."""
-
-    def __init__(self, match_id: str) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Dispute",
-                style=discord.ButtonStyle.danger,
-                custom_id=f"multiverse:dispute:{match_id}",
+        if self.verb == "confirm":
+            await self._announce_confirmation(
+                bot, interaction, tournament, round_before
             )
-        )
-        self.match_id = match_id
+        else:
+            await self._flag_dispute_to_to(bot, interaction)
 
-    @classmethod
-    async def from_custom_id(
-        cls,
+    async def _announce_confirmation(
+        self,
+        bot: "MultiverseBot",
         interaction: discord.Interaction,
-        item: discord.ui.Button,
-        match: "re.Match[str]",
-    ) -> "DisputeResultButton":
-        return cls(match["match_id"])
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        bot = interaction.client
-        assert isinstance(bot, MultiverseBot)
+        tournament: Tournament,
+        round_before: int,
+    ) -> None:
+        """The confirmed result is in the engine; announce it — and whatever
+        Round close it triggered — without dying silently if a channel post
+        fails, since the confirmation itself already stuck."""
         try:
-            tournament, _ = open_match_by_id(bot.engine, self.match_id)
-            bot.engine.dispute_result(
-                tournament.tournament_id,
-                self.match_id,
-                disputed_by=str(interaction.user.id),
+            confirmed = _match_in_round(
+                bot.engine, tournament.tournament_id, round_before, self.match_id
             )
-        except (EngineError, CommandError) as error:
-            await interaction.response.send_message(str(error), ephemeral=True)
-            return
-        assert interaction.message is not None
-        await interaction.response.edit_message(
-            content=(
-                f"{interaction.message.content}\n"
-                f"⚠️ Disputed by {interaction.user.mention}."
-            ),
-            view=None,
-        )
-        channel = interaction.channel
-        assert isinstance(channel, discord.Thread)
-        await channel.send(
+            assert confirmed is not None
+            await announce_result(bot, tournament, confirmed)
+            await advance_announcements(bot, tournament.tournament_id, round_before)
+        except (EngineError, CommandError, discord.HTTPException) as error:
+            await interaction.followup.send(
+                f"The result is confirmed, but announcing it failed: {error}\n"
+                "A TO can re-post with `/tournament post-standings` and "
+                "`/tournament post-pairings`."
+            )
+
+    async def _flag_dispute_to_to(
+        self, bot: "MultiverseBot", interaction: discord.Interaction
+    ) -> None:
+        """Ping the TO with the Match thread as the resolution context
+        (spec #1 story 19)."""
+        thread_id = bot.bindings_store.match_thread(self.match_id)
+        where = f"<#{thread_id}>" if thread_id is not None else "its Match thread"
+        await interaction.followup.send(
             f"<@&{bot.to_role_id}> — {interaction.user.mention} disputed the "
-            f"reported result in {channel.mention}. Sort it out here, then "
-            "either player can `/report` again — or the TO rules on it.",
+            f"Reported Result in {where}. Sort it out there, then either "
+            "player can `/report` again — or the TO rules on it.",
             allowed_mentions=discord.AllowedMentions(
                 everyone=False,
                 roles=[discord.Object(bot.to_role_id)],
@@ -701,11 +745,19 @@ def _install_commands(bot: MultiverseBot) -> None:
             f"{format_score(games_won, games_lost, games_drawn)}**"
         )
         view = discord.ui.View(timeout=None)
-        view.add_item(ConfirmResultButton(match.match_id))
-        view.add_item(DisputeResultButton(match.match_id))
+        for verb in _PENDING_RESULT_ACTIONS:
+            view.add_item(
+                PendingResultButton(
+                    verb,
+                    match.match_id,
+                    reporter,
+                    str(winner.id) if winner is not None else "draw",
+                    f"{games_won}-{games_lost}-{games_drawn}",
+                )
+            )
         await interaction.response.send_message(
             f"{interaction.user.mention} reports {outcome}.\n"
-            f"<@{opponent}> — confirm or dispute:",
+            f"<@{opponent}> — Confirm or Dispute below:",
             view=view,
             allowed_mentions=discord.AllowedMentions(
                 everyone=False, roles=False, users=[discord.Object(int(opponent))]
