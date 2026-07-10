@@ -204,6 +204,21 @@ def test_odd_player_count_starts_with_a_bye_scored_as_a_two_zero_win() -> None:
     assert {bye.player_a, real[0].player_a, real[0].player_b} == set(PLAYERS[:3])
 
 
+def test_round_one_bye_recipient_varies_with_the_seed() -> None:
+    recipients = set()
+    for seed in range(10):
+        engine = TournamentEngine()
+        tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+        for player_id in PLAYERS[:3]:
+            engine.register_player(tournament_id, player_id)
+        engine.start_tournament(tournament_id, seed=seed)
+        (bye,) = [m for m in engine.pairings(tournament_id, round_number=1) if m.is_bye]
+        recipients.add(bye.player_a)
+    # Everyone is on 0 points, so the Round 1 Bye is random: across seeds it
+    # must not stick to one player.
+    assert len(recipients) > 1
+
+
 def test_bye_goes_to_the_lowest_ranked_player_without_a_prior_bye() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
