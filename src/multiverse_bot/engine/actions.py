@@ -19,6 +19,21 @@ class TournamentCreated:
 
 
 @dataclass(frozen=True)
+class RegistrationOpened:
+    """The TO opens the signup window; players can register until it closes."""
+
+    tournament_id: str
+
+
+@dataclass(frozen=True)
+class RegistrationClosed:
+    """The TO closes the signup window, finalizing the player count; Decks can
+    still be submitted until the start. Reopenable while not started."""
+
+    tournament_id: str
+
+
+@dataclass(frozen=True)
 class PlayerRegistered:
     tournament_id: str
     player_id: str
@@ -117,6 +132,8 @@ class TournamentEnded:
 
 Action = (
     TournamentCreated
+    | RegistrationOpened
+    | RegistrationClosed
     | PlayerRegistered
     | DeckSubmitted
     | TournamentStarted

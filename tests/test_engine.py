@@ -32,6 +32,7 @@ def test_engine_imports_without_discord_or_database() -> None:
 def test_created_tournament_registers_players() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
 
     engine.register_player(tournament_id, "alice")
     engine.register_player(tournament_id, "bob")
@@ -164,6 +165,7 @@ def test_concurrent_tournaments_are_independent() -> None:
     engine = TournamentEngine()
     running_id = start_four_player_tournament(engine)
     upcoming_id = engine.create_tournament(name="Weekly Riftbound #2")
+    engine.open_registration(upcoming_id)
     assert upcoming_id != running_id
 
     # The same players can register for next week while this week runs.
@@ -183,6 +185,7 @@ def test_concurrent_tournaments_are_independent() -> None:
 def test_odd_player_count_starts_with_a_bye_scored_as_a_two_zero_win() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in PLAYERS[:3]:
         register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
@@ -209,6 +212,7 @@ def test_round_one_bye_recipient_varies_with_the_seed() -> None:
     for seed in range(10):
         engine = TournamentEngine()
         tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+        engine.open_registration(tournament_id)
         for player_id in PLAYERS[:3]:
             register_with_deck(engine, tournament_id, player_id)
         engine.start_tournament(tournament_id, seed=seed)
@@ -222,6 +226,7 @@ def test_round_one_bye_recipient_varies_with_the_seed() -> None:
 def test_bye_goes_to_the_lowest_ranked_player_without_a_prior_bye() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in PLAYERS[:3]:
         register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
@@ -253,6 +258,7 @@ def test_property_no_tournament_ever_repeats_an_opponent_or_doubles_a_bye(
     for seed in range(25):
         engine = TournamentEngine()
         tournament_id = engine.create_tournament(name=f"prop-{player_count}-{seed}")
+        engine.open_registration(tournament_id)
         players = [f"p{i}" for i in range(player_count)]
         for player_id in players:
             register_with_deck(engine, tournament_id, player_id)
@@ -308,6 +314,7 @@ def test_pairings_show_results_as_they_come_in() -> None:
 def test_a_bye_match_does_not_accept_reported_results() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in PLAYERS[:3]:
         register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)

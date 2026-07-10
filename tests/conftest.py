@@ -23,6 +23,7 @@ def create_tournament_with_players(
 ) -> str:
     """Create and register only, leaving the start (and its options) to the test."""
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in players:
         register_with_deck(engine, tournament_id, player_id)
     return tournament_id
