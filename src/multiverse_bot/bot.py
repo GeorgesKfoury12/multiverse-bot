@@ -375,6 +375,22 @@ def reopen_preview(
     ]
 
 
+def require_previewed_reopen(
+    engine: TournamentEngine, tournament: Tournament, round_number: int
+) -> None:
+    """Refuse a reopen click whose preview described reopening a different
+    Round. ``current_round`` alone cannot tell: if the final Round completed
+    the Tournament since the preview, it still reads the same, yet the click
+    would now un-complete that Round instead of reverting it. Re-running the
+    guards must offer the very Round the TO signed off on."""
+    reopened, _ = reopen_preview(engine, tournament)
+    if reopened != round_number:
+        raise CommandError(
+            "the Tournament has moved on since that reopen was offered; run "
+            "`/tournament reopen-round` again for the current state"
+        )
+
+
 def _percent(value: Fraction) -> str:
     return f"{float(value):.1%}"
 
@@ -833,9 +849,10 @@ class TOConfirmButton(
 
     Like the confirm/Dispute buttons, everything lives in the custom_id so a
     click works across restarts: ``argument`` is the round count (start), the
-    player (drop), or the Round the preview described (forceclose/end/reopen)
-    — Round-scoped clicks are refused once the Round has moved on, so the
-    button never acts on a situation the TO did not sign off."""
+    player (drop), the Round the preview described (forceclose/end), or the
+    Round a reopen would reopen (reopen) — Round-scoped clicks are refused
+    once the Round has moved on, so the button never acts on a situation the
+    TO did not sign off."""
 
     def __init__(
         self, operation: str, tournament_id: str, argument: str, label: str = "Confirm"
@@ -990,9 +1007,9 @@ class TOConfirmButton(
         reusing threads whose Pairings may have changed; the engine re-checks
         the no-confirmed-results guard, refusing a click that outraced play."""
         tournament = bot.engine.tournament(self.tournament_id)
-        if tournament.phase not in ("in_progress", "completed"):
+        if tournament.phase not in _RESULTED:
             raise CommandError(f"**{tournament.name}** is not underway")
-        require_current_round(tournament, int(self.argument))
+        require_previewed_reopen(bot.engine, tournament, int(self.argument))
         completed = tournament.phase == "completed"
         assert tournament.current_round is not None
         reverted = (
@@ -1534,7 +1551,7 @@ def _install_commands(bot: MultiverseBot) -> None:
             view=to_confirmation(
                 "reopen",
                 target.tournament_id,
-                str(target.current_round),
+                str(reopened),
                 f"Reopen Round {reopened}",
             ),
             ephemeral=True,

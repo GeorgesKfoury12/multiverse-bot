@@ -22,6 +22,7 @@ from multiverse_bot.bot import (
     open_match_by_reference,
     reopen_preview,
     require_between_rounds,
+    require_previewed_reopen,
     require_current_round,
     result_phrase,
     unfinished_match_lines,
@@ -317,6 +318,32 @@ def test_reopen_preview_refuses_an_early_ended_tournament() -> None:
 
     with pytest.raises(CommandError, match="ended early"):
         reopen_preview(engine, engine.tournament(tournament_id))
+
+
+def test_a_reopen_click_matching_its_preview_passes() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine, players=("alice", "bob", "carol", "dave"))
+    confirm_round(engine, tournament_id, round_number=1)
+    reopened, _ = reopen_preview(engine, engine.tournament(tournament_id))
+
+    require_previewed_reopen(engine, engine.tournament(tournament_id), reopened)
+
+
+def test_a_reopen_click_is_refused_once_it_would_reopen_a_different_round() -> None:
+    """The preview offered 'Reopen Round 1' while the final Round 2 was in
+    progress; by the click Round 2's last result confirmed and completed the
+    Tournament. ``current_round`` still reads 2, but the same click would now
+    un-complete Round 2 — an action the TO never signed off on."""
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine, players=("alice", "bob", "carol", "dave"))
+    confirm_round(engine, tournament_id, round_number=1)
+    reopened, _ = reopen_preview(engine, engine.tournament(tournament_id))
+    assert reopened == 1
+    confirm_round(engine, tournament_id, round_number=2)
+    assert engine.tournament(tournament_id).phase == "completed"
+
+    with pytest.raises(CommandError, match="moved on"):
+        require_previewed_reopen(engine, engine.tournament(tournament_id), reopened)
 
 
 # -- the confirmation button surviving restarts ---------------------------------

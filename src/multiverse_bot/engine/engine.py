@@ -470,8 +470,8 @@ class TournamentEngine:
                 for match in tournament.rounds[tournament.current_round]
             ):
                 raise EngineError(
-                    f"round {tournament.current_round} already has a confirmed "
-                    f"result; round {tournament.current_round - 1} stays closed"
+                    f"Round {tournament.current_round} already has a confirmed "
+                    f"result; Round {tournament.current_round - 1} stays closed"
                 )
         else:
             raise EngineError(f"{tournament_id} has no closed Round to reopen")
