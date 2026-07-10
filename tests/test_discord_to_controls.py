@@ -23,6 +23,7 @@ from multiverse_bot.bot import (
     reopen_preview,
     require_between_rounds,
     require_previewed_reopen,
+    require_previewed_unregister,
     require_current_round,
     result_phrase,
     unfinished_match_lines,
@@ -346,6 +347,53 @@ def test_a_reopen_click_is_refused_once_it_would_reopen_a_different_round() -> N
         require_previewed_reopen(engine, engine.tournament(tournament_id), reopened)
 
 
+# -- guarding a stale unregister click -------------------------------------------
+
+
+def _tournament_with_straggler(engine: TournamentEngine) -> str:
+    """Two decked players plus 'ghost', registered but deck-less — the
+    straggler an unregister preview would target (issue #20)."""
+    tournament_id = create_tournament_with_players(engine, players=("alice", "bob"))
+    engine.register_player(tournament_id, "ghost")
+    return tournament_id
+
+
+def test_an_unregister_click_matching_its_preview_passes() -> None:
+    engine = TournamentEngine()
+    tournament_id = _tournament_with_straggler(engine)
+
+    require_previewed_unregister(
+        engine, engine.tournament(tournament_id), "ghost", deckless=True
+    )
+
+
+def test_an_unregister_click_is_refused_once_the_deck_situation_changed() -> None:
+    """The preview said 'they have no Deck on file'; by the click the
+    straggler submitted — the chase succeeded, and firing anyway would
+    discard a Deck the TO never signed off on."""
+    engine = TournamentEngine()
+    tournament_id = _tournament_with_straggler(engine)
+    engine.submit_deck(tournament_id, "ghost", "ghost's decklist")
+
+    with pytest.raises(CommandError, match="changed"):
+        require_previewed_unregister(
+            engine, engine.tournament(tournament_id), "ghost", deckless=True
+        )
+
+
+def test_an_unregister_click_is_refused_once_the_player_already_left() -> None:
+    """The player unregistered themselves between the preview and the click;
+    there is nobody left to remove."""
+    engine = TournamentEngine()
+    tournament_id = _tournament_with_straggler(engine)
+    engine.unregister_player(tournament_id, "ghost", unregistered_by="ghost")
+
+    with pytest.raises(CommandError, match="no longer"):
+        require_previewed_unregister(
+            engine, engine.tournament(tournament_id), "ghost", deckless=True
+        )
+
+
 # -- the confirmation button surviving restarts ---------------------------------
 
 
@@ -374,6 +422,21 @@ def test_a_confirm_button_round_trips_through_its_custom_id(
     assert parsed["operation"] == operation
     assert parsed["tournament_id"] == "T1"
     assert parsed["argument"] == argument
+    assert parsed["qualifier"] is None
+
+
+def test_a_confirm_buttons_qualifier_round_trips_too() -> None:
+    """An unregister click must know what Deck situation its preview
+    described, so the qualifier rides the custom_id like everything else."""
+    button = TOConfirmButton(
+        "unregister", "T1", "123456789", label="Do it", qualifier="deckless"
+    )
+
+    parsed = re.fullmatch(_TO_CONFIRM_TEMPLATE, button.custom_id)
+
+    assert parsed is not None
+    assert parsed["argument"] == "123456789"
+    assert parsed["qualifier"] == "deckless"
 
 
 # -- guarding a stale confirmation click ---------------------------------------

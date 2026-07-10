@@ -391,6 +391,27 @@ def require_previewed_reopen(
         )
 
 
+def require_previewed_unregister(
+    engine: TournamentEngine, tournament: Tournament, player_id: str, deckless: bool
+) -> None:
+    """Refuse an unregister click whose preview no longer holds: the player
+    may have left the sign-up list on their own (nothing left to remove), or
+    a straggler previewed as deck-less may have submitted their Deck between
+    the preview and the click — the chase succeeding — and firing anyway
+    would discard a Deck the TO never signed off on."""
+    if player_id not in tournament.players:
+        raise CommandError(
+            f"<@{player_id}> is no longer on **{tournament.name}**'s sign-up list"
+        )
+    now_deckless = player_id in engine.players_missing_decks(tournament.tournament_id)
+    if now_deckless != deckless:
+        raise CommandError(
+            f"<@{player_id}>'s Deck situation has changed since that "
+            "Unregister was offered; run `/tournament unregister` again for "
+            "the current state"
+        )
+
+
 def _percent(value: Fraction) -> str:
     return f"{float(value):.1%}"
 
@@ -493,6 +514,18 @@ async def bound_channel(
             f"the {purpose} binding for {tournament_id} is not a text channel"
         )
     return channel
+
+
+def unregister_and_discard(
+    bot: MultiverseBot, tournament_id: str, player_id: str, unregistered_by: str
+) -> None:
+    """One seam for both Unregister routes (the TO's confirm and the player's
+    own command): the engine removal and the stored Deck-image bytes travel
+    together, so neither route can leave a Sealed image behind."""
+    bot.engine.unregister_player(
+        tournament_id, player_id, unregistered_by=unregistered_by
+    )
+    bot.deck_images.delete_image(tournament_id, player_id)
 
 
 async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
@@ -834,7 +867,7 @@ class PendingResultButton(
 
 _TO_CONFIRM_TEMPLATE = (
     r"multiverse:to-(?P<operation>start|drop|unregister|forceclose|end|reopen):"
-    r"(?P<tournament_id>[^:]+):(?P<argument>[^:]+)"
+    r"(?P<tournament_id>[^:]+):(?P<argument>[^:]+)(?::(?P<qualifier>[^:]+))?"
 )
 
 
@@ -853,21 +886,32 @@ class TOConfirmButton(
     (forceclose/end), or the Round a reopen would reopen (reopen) —
     Round-scoped clicks are refused
     once the Round has moved on, so the button never acts on a situation the
-    TO did not sign off."""
+    TO did not sign off. ``qualifier`` is an optional extra segment for the
+    same guard where a Round number cannot carry it: an unregister records
+    the Deck situation its preview described."""
 
     def __init__(
-        self, operation: str, tournament_id: str, argument: str, label: str = "Confirm"
+        self,
+        operation: str,
+        tournament_id: str,
+        argument: str,
+        label: str = "Confirm",
+        qualifier: str | None = None,
     ) -> None:
+        custom_id = f"multiverse:to-{operation}:{tournament_id}:{argument}"
+        if qualifier is not None:
+            custom_id += f":{qualifier}"
         super().__init__(
             discord.ui.Button(
                 label=label,
                 style=discord.ButtonStyle.danger,
-                custom_id=f"multiverse:to-{operation}:{tournament_id}:{argument}",
+                custom_id=custom_id,
             )
         )
         self.operation = operation
         self.tournament_id = tournament_id
         self.argument = argument
+        self.qualifier = qualifier
 
     @classmethod
     async def from_custom_id(
@@ -878,7 +922,12 @@ class TOConfirmButton(
     ) -> "TOConfirmButton":
         # The label is not reconstructed: the posted message still renders the
         # original button; this instance only handles the click.
-        return cls(match["operation"], match["tournament_id"], match["argument"])
+        return cls(
+            match["operation"],
+            match["tournament_id"],
+            match["argument"],
+            qualifier=match["qualifier"],
+        )
 
     async def callback(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
@@ -957,13 +1006,18 @@ class TOConfirmButton(
     ) -> None:
         """The TO removes a registrant before the start (issue #20) — the
         "drop" half of resolving a straggler, distinct from a Drop: they
-        leave the sign-up list entirely, Deck and all. The engine re-checks
-        the phase, refusing a click that outraced the start."""
+        leave the sign-up list entirely, Deck and all. The click is refused
+        if it outraced the start, or if the previewed Deck situation (the
+        qualifier) no longer holds — e.g. the straggler submitted meanwhile."""
         tournament = bot.engine.tournament(self.tournament_id)
-        bot.engine.unregister_player(
-            self.tournament_id, self.argument, unregistered_by=str(interaction.user.id)
+        if tournament.phase not in _STARTABLE:
+            raise CommandError(f"**{tournament.name}** has already started")
+        require_previewed_unregister(
+            bot.engine, tournament, self.argument, deckless=self.qualifier == "deckless"
         )
-        bot.deck_images.delete_image(self.tournament_id, self.argument)
+        unregister_and_discard(
+            bot, self.tournament_id, self.argument, str(interaction.user.id)
+        )
         await interaction.response.edit_message(
             content=f"<@{self.argument}> is unregistered from **{tournament.name}**.",
             view=None,
@@ -984,7 +1038,7 @@ class TOConfirmButton(
             )
         except (CommandError, discord.HTTPException) as error:
             await interaction.followup.send(
-                f"The unregister is recorded, but announcing it failed: {error}",
+                f"The Unregister is recorded, but announcing it failed: {error}",
                 ephemeral=True,
             )
 
@@ -1119,12 +1173,16 @@ class TOConfirmButton(
 
 
 def to_confirmation(
-    operation: str, tournament_id: str, argument: str, label: str
+    operation: str,
+    tournament_id: str,
+    argument: str,
+    label: str,
+    qualifier: str | None = None,
 ) -> discord.ui.View:
     """An ephemeral preview's single confirm button — the only way a
     destructive TO operation fires."""
     view = discord.ui.View(timeout=None)
-    view.add_item(TOConfirmButton(operation, tournament_id, argument, label))
+    view.add_item(TOConfirmButton(operation, tournament_id, argument, label, qualifier))
     return view
 
 
@@ -1560,9 +1618,10 @@ def _install_commands(bot: MultiverseBot) -> None:
             raise CommandError(
                 f"{player.mention} is not registered in **{target.name}**"
             )
+        deckless = player_id in engine.players_missing_decks(target.tournament_id)
         deck_note = (
             "they have no Deck on file"
-            if player_id in engine.players_missing_decks(target.tournament_id)
+            if deckless
             else "their submitted Deck is discarded"
         )
         await interaction.response.send_message(
@@ -1574,6 +1633,7 @@ def _install_commands(bot: MultiverseBot) -> None:
                 target.tournament_id,
                 player_id,
                 f"Unregister {player.display_name}",
+                qualifier="deckless" if deckless else "decked",
             ),
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -1671,10 +1731,7 @@ def _install_commands(bot: MultiverseBot) -> None:
         player_id = str(interaction.user.id)
         if player_id not in target.players:
             raise CommandError(f"you are not signed up for **{target.name}**")
-        engine.unregister_player(
-            target.tournament_id, player_id, unregistered_by=player_id
-        )
-        bot.deck_images.delete_image(target.tournament_id, player_id)
+        unregister_and_discard(bot, target.tournament_id, player_id, player_id)
         count = len(engine.tournament(target.tournament_id).players)
         await interaction.response.send_message(
             f"{interaction.user.mention} has left **{target.name}** — "

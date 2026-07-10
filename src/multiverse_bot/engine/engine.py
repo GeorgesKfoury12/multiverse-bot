@@ -255,7 +255,7 @@ class TournamentEngine:
         tournament = self._tournament_state(tournament_id)
         if tournament.phase not in _PRE_START_PHASES:
             raise EngineError(
-                f"{tournament_id} has started; leaving now is a Drop, not an unregister"
+                f"{tournament_id} has started; leaving now is a Drop, not an Unregister"
             )
         if player_id not in tournament.players:
             raise EngineError(f"{player_id} is not registered in {tournament_id}")
