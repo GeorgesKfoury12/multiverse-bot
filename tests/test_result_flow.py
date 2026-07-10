@@ -8,7 +8,7 @@ missing a query.
 from fractions import Fraction
 
 import pytest
-from conftest import PLAYERS, start_four_player_tournament
+from conftest import PLAYERS, confirm_round, start_four_player_tournament
 
 from multiverse_bot.engine import EngineError, Match, TournamentEngine
 from multiverse_bot.engine.actions import (
@@ -272,22 +272,6 @@ def test_to_can_correct_a_confirmed_result_until_the_round_closes() -> None:
     }
     assert points[first.player_a] == 0
     assert points[first.player_b] == 3
-
-
-def confirm_round(engine: TournamentEngine, tournament_id: str, round_number: int):
-    """Report and confirm a player_a win for every Match of the Round."""
-    for match in engine.pairings(tournament_id, round_number):
-        engine.report_result(
-            tournament_id,
-            match.match_id,
-            reported_by=match.player_a,
-            winner=match.player_a,
-            games_won=2,
-            games_lost=0,
-        )
-        engine.confirm_result(
-            tournament_id, match.match_id, confirmed_by=match.player_b
-        )
 
 
 def test_results_freeze_the_moment_the_round_closes() -> None:

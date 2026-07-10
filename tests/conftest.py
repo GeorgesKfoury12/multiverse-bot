@@ -13,6 +13,23 @@ def start_four_player_tournament(engine: TournamentEngine, seed: int = 42) -> st
     return tournament_id
 
 
+def confirm_round(
+    engine: TournamentEngine, tournament_id: str, round_number: int
+) -> None:
+    """Report and confirm a player_a win for every playable Match of the Round."""
+    for match in engine.pairings(tournament_id, round_number):
+        if match.is_bye:
+            continue
+        report_and_confirm(
+            engine,
+            tournament_id,
+            match,
+            winner=match.player_a,
+            games_won=2,
+            games_lost=0,
+        )
+
+
 def report_and_confirm(
     engine: TournamentEngine,
     tournament_id: str,
