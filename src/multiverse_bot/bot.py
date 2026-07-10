@@ -226,6 +226,29 @@ def open_match_for_thread(
     return open_match_by_id(engine, match_id)
 
 
+def open_match_by_reference(
+    engine: TournamentEngine,
+    bindings_store: BindingsStore,
+    match_id: str | None,
+    thread_id: int | None,
+) -> tuple[Tournament, Match]:
+    """The Match a TO ruling targets: the explicit Match ID if given, else the
+    Match hosted by the thread the command was used in. The ID route keeps a
+    Match with no thread on file — the force-close walk-through's fallback —
+    rulable, so a Round can always close (ticket #12)."""
+    if match_id is not None:
+        return open_match_by_id(engine, match_id)
+    hosted = (
+        bindings_store.match_for_thread(thread_id) if thread_id is not None else None
+    )
+    if hosted is None:
+        raise CommandError(
+            "use this command inside a Match thread, or pass the Match ID "
+            "(e.g. T1-R2-M3) as `match`"
+        )
+    return open_match_by_id(engine, hosted)
+
+
 def result_phrase(match: Match) -> str:
     """A Match's result as one sentence fragment — the wording every surface
     shares (the scores channel, the TO's thread replies, the force-close
@@ -870,6 +893,12 @@ class TOConfirmButton(
                 f"Round {tournament.current_round} has no unfinished Matches left"
             )
         lines = unfinished_match_lines(remaining, bot.bindings_store.match_thread)
+        closing = "\nThe Round closes itself the moment the last result lands."
+        if any(bot.bindings_store.match_thread(m.match_id) is None for m in remaining):
+            closing = (
+                "\nA Match with no thread takes its ruling by ID: "
+                "`/tournament assign-result match:<ID>`." + closing
+            )
         await interaction.response.edit_message(
             content=(
                 f"Force-closing Round {tournament.current_round} of "
@@ -877,7 +906,7 @@ class TOConfirmButton(
                 "`/tournament assign-result` — or `/tournament confirm-result` "
                 "to accept a Pending report as it stands:\n"
                 + "\n".join(lines)
-                + "\nThe Round closes itself the moment the last result lands."
+                + closing
             ),
             view=None,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -1164,15 +1193,22 @@ def _install_commands(bot: MultiverseBot) -> None:
 
     @tournament_group.command(
         name="confirm-result",
-        description="Confirm this Match's reported result as the TO",
+        description="Confirm a Match's reported result as the TO",
     )
     @app_commands.check(is_to)
-    async def confirm_result(interaction: discord.Interaction) -> None:
+    @app_commands.rename(match_id="match")
+    @app_commands.describe(
+        match_id="Match ID (e.g. T1-R2-M3); defaults to this thread's Match",
+    )
+    async def confirm_result(
+        interaction: discord.Interaction, match_id: str | None = None
+    ) -> None:
         """The TO confirms a Pending or Disputed result as reported — ruling a
         Dispute in the reporter's favor, or unsticking an unresponsive
-        opponent (ticket #12). Used in the Match thread, like `/report`."""
-        target, match = open_match_for_thread(
-            engine, bot.bindings_store, interaction.channel_id
+        opponent (ticket #12). Used in the Match thread, like `/report`; the
+        Match ID reaches a Match with no thread."""
+        target, match = open_match_by_reference(
+            engine, bot.bindings_store, match_id, interaction.channel_id
         )
         round_before = target.current_round
         assert round_before is not None
@@ -1189,24 +1225,28 @@ def _install_commands(bot: MultiverseBot) -> None:
 
     @tournament_group.command(
         name="assign-result",
-        description="Set or correct this Match's result by TO ruling",
+        description="Set or correct a Match's result by TO ruling",
     )
     @app_commands.check(is_to)
+    @app_commands.rename(match_id="match")
     @app_commands.describe(
         score="Game score, winner's count first: 2-0, 2-1, or 1-1-1 for a draw",
         winner="Who won the Match; leave empty for a draw",
+        match_id="Match ID (e.g. T1-R2-M3); defaults to this thread's Match",
     )
     async def assign_result(
         interaction: discord.Interaction,
         score: str,
         winner: discord.Member | None = None,
+        match_id: str | None = None,
     ) -> None:
         """The TO sets the Match's result by fiat — no-shows, Dispute rulings,
         corrections — replacing whatever was there, until the Round closes
-        (ticket #12). Used in the Match thread; an Assigned Result counts
-        identically to a reported one."""
-        target, match = open_match_for_thread(
-            engine, bot.bindings_store, interaction.channel_id
+        (ticket #12). Used in the Match thread; the Match ID reaches a Match
+        with no thread. An Assigned Result counts identically to a reported
+        one."""
+        target, match = open_match_by_reference(
+            engine, bot.bindings_store, match_id, interaction.channel_id
         )
         round_before = target.current_round
         assert round_before is not None
@@ -1227,7 +1267,7 @@ def _install_commands(bot: MultiverseBot) -> None:
         assert assigned is not None
         note = " (replacing the confirmed result)" if corrected else ""
         await interaction.response.send_message(
-            f"⚖️ The TO set this Match's result{note}: {result_phrase(assigned)}.",
+            f"⚖️ The TO set {match.match_id}'s result{note}: {result_phrase(assigned)}.",
             allowed_mentions=player_mentions(match),
         )
         await announce_confirmed_result(

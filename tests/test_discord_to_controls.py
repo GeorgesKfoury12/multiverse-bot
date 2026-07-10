@@ -19,6 +19,7 @@ from multiverse_bot.bot import (
     _TO_CONFIRM_TEMPLATE,
     CommandError,
     TOConfirmButton,
+    open_match_by_reference,
     require_between_rounds,
     require_current_round,
     result_phrase,
@@ -111,6 +112,61 @@ def test_a_touched_round_directs_the_to_to_force_close_first() -> None:
 
     with pytest.raises(CommandError, match="force-close"):
         require_between_rounds(engine, engine.tournament(tournament_id))
+
+
+# -- resolving the Match a TO ruling targets ------------------------------------
+
+
+def test_an_explicit_match_id_resolves_without_a_thread(tmp_path) -> None:
+    """A Match whose thread is missing (never created, or the binding lost)
+    must still be rulable, or a force-close could never finish: the TO passes
+    the Match ID the walk-through shows instead."""
+    from pathlib import Path
+
+    from multiverse_bot.store import BindingsStore
+
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine)
+    (playable,) = [m for m in engine.pairings(tournament_id, 1) if not m.is_bye]
+    store = BindingsStore(Path(tmp_path) / "tournaments.db")  # no threads on file
+
+    tournament, match = open_match_by_reference(
+        engine, store, playable.match_id, thread_id=None
+    )
+
+    assert tournament.tournament_id == tournament_id
+    assert match.match_id == playable.match_id
+
+
+def test_without_a_match_id_the_thread_resolves_as_before(tmp_path) -> None:
+    from pathlib import Path
+
+    from multiverse_bot.store import BindingsStore
+
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine)
+    (playable,) = [m for m in engine.pairings(tournament_id, 1) if not m.is_bye]
+    store = BindingsStore(Path(tmp_path) / "tournaments.db")
+    store.save_match_thread(playable.match_id, 555)
+
+    _, match = open_match_by_reference(engine, store, None, thread_id=555)
+
+    assert match.match_id == playable.match_id
+
+
+def test_neither_match_id_nor_thread_is_refused_with_both_ways_named(
+    tmp_path,
+) -> None:
+    from pathlib import Path
+
+    from multiverse_bot.store import BindingsStore
+
+    engine = TournamentEngine()
+    start_tournament(engine)
+    store = BindingsStore(Path(tmp_path) / "tournaments.db")
+
+    with pytest.raises(CommandError, match="Match thread.*match"):
+        open_match_by_reference(engine, store, None, thread_id=None)
 
 
 # -- rendering results and the force-close walk-through ------------------------
