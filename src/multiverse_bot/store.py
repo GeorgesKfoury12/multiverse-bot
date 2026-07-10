@@ -131,6 +131,15 @@ class BindingsStore:
         ).fetchone()
         return row[0] if row else None
 
+    def match_for_thread(self, thread_id: int) -> str | None:
+        """The Match hosted in the given thread — how the result flow knows
+        what a ``/report`` or button click in a thread is about."""
+        row = self._connection.execute(
+            "SELECT match_id FROM match_threads WHERE thread_id = ?",
+            (thread_id,),
+        ).fetchone()
+        return row[0] if row else None
+
 
 def open_engine(path: str | Path) -> TournamentEngine:
     """Open (creating if needed) the action log at ``path`` and return an
