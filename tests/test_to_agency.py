@@ -12,6 +12,7 @@ import pytest
 from conftest import (
     PLAYERS,
     confirm_round,
+    create_tournament_with_players,
     report_and_confirm,
     start_four_player_tournament,
 )
@@ -23,9 +24,7 @@ FIVE_PLAYERS = (*PLAYERS, "erin")
 
 
 def start_five_player_tournament(engine: TournamentEngine, seed: int = 42) -> str:
-    tournament_id = engine.create_tournament(name="Weekly Riftbound #2")
-    for player_id in FIVE_PLAYERS:
-        engine.register_player(tournament_id, player_id)
+    tournament_id = create_tournament_with_players(engine, FIVE_PLAYERS)
     engine.start_tournament(tournament_id, seed=seed)
     return tournament_id
 
@@ -138,9 +137,15 @@ def test_a_dropped_player_finishes_their_match_and_is_never_paired_again() -> No
     first, second = engine.pairings(tournament_id, round_number=1)
     quitter = first.player_b
     assert quitter is not None
+    before = engine.standings(tournament_id)
 
     # Dropping mid-Round leaves the current Match to the normal result flow.
     engine.drop_player(tournament_id, quitter, dropped_by=quitter)
+
+    # A Drop is never retroactive: it changes no result, standing, or pairing.
+    assert engine.standings(tournament_id) == before
+    assert engine.pairings(tournament_id, round_number=1) == (first, second)
+
     report_and_confirm(
         engine, tournament_id, first, winner=quitter, games_won=2, games_lost=1
     )
@@ -168,9 +173,7 @@ def test_a_dropped_player_finishes_their_match_and_is_never_paired_again() -> No
 
 def test_drop_guard_rails() -> None:
     engine = TournamentEngine()
-    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
-    for player_id in PLAYERS:
-        engine.register_player(tournament_id, player_id)
+    tournament_id = create_tournament_with_players(engine)
 
     # No Drops before the Tournament starts (leaving registration is not a Drop).
     with pytest.raises(EngineError):
@@ -195,9 +198,7 @@ def test_drop_guard_rails() -> None:
 
 def test_round_count_override_at_start_sets_the_tournament_length() -> None:
     engine = TournamentEngine()
-    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
-    for player_id in PLAYERS:
-        engine.register_player(tournament_id, player_id)
+    tournament_id = create_tournament_with_players(engine)
 
     # 4 players default to 2 rounds; the TO stretches the week to 3.
     warning = engine.start_tournament(tournament_id, seed=42, round_count=3)
@@ -211,9 +212,7 @@ def test_round_count_override_at_start_sets_the_tournament_length() -> None:
 
 def test_a_short_override_warns_that_an_undefeated_winner_is_impossible() -> None:
     engine = TournamentEngine()
-    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
-    for player_id in PLAYERS:
-        engine.register_player(tournament_id, player_id)
+    tournament_id = create_tournament_with_players(engine)
 
     warning = engine.start_tournament(tournament_id, seed=42, round_count=1)
 
@@ -227,9 +226,7 @@ def test_a_short_override_warns_that_an_undefeated_winner_is_impossible() -> Non
 
 def test_round_count_override_must_fit_the_player_count() -> None:
     engine = TournamentEngine()
-    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
-    for player_id in PLAYERS:
-        engine.register_player(tournament_id, player_id)
+    tournament_id = create_tournament_with_players(engine)
 
     # 4 players run out of fresh opponents after 3 rounds; 0 rounds is no
     # Tournament at all.
@@ -241,9 +238,7 @@ def test_round_count_override_must_fit_the_player_count() -> None:
 
 def test_replaying_a_history_with_drop_override_and_early_end_is_identical() -> None:
     engine = TournamentEngine()
-    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
-    for player_id in FIVE_PLAYERS:
-        engine.register_player(tournament_id, player_id)
+    tournament_id = create_tournament_with_players(engine, FIVE_PLAYERS)
     engine.start_tournament(tournament_id, seed=7, round_count=3)
     engine.drop_player(tournament_id, "erin", dropped_by="georges-to")
     for match in engine.pairings(tournament_id, round_number=1):
