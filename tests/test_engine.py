@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from multiverse_bot.engine import EngineError, TournamentEngine
+from multiverse_bot.engine import EngineError, Match, TournamentEngine
 
 PLAYERS = ("alice", "bob", "carol", "dave")
 
@@ -22,6 +22,28 @@ def start_four_player_tournament(engine: TournamentEngine, seed: int = 42) -> st
         engine.register_player(tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=seed)
     return tournament_id
+
+
+def report_and_confirm(
+    engine: TournamentEngine,
+    tournament_id: str,
+    match: Match,
+    winner: str,
+    games_won: int,
+    games_lost: int,
+) -> None:
+    """The winner reports, the loser confirms — the shortest confirmed path."""
+    engine.report_result(
+        tournament_id,
+        match.match_id,
+        reported_by=winner,
+        winner=winner,
+        games_won=games_won,
+        games_lost=games_lost,
+    )
+    loser = match.player_b if winner == match.player_a else match.player_a
+    assert loser is not None
+    engine.confirm_result(tournament_id, match.match_id, confirmed_by=loser)
 
 
 def test_engine_imports_without_discord_or_database() -> None:
@@ -79,9 +101,10 @@ def test_full_results_update_standings_and_auto_advance_the_round() -> None:
 
     round_one = engine.pairings(tournament_id, round_number=1)
     for match in round_one:
-        engine.submit_result(
+        report_and_confirm(
+            engine,
             tournament_id,
-            match.match_id,
+            match,
             winner=match.player_a,
             games_won=2,
             games_lost=0,
@@ -114,9 +137,10 @@ def test_happy_path_four_players_two_rounds_end_to_end() -> None:
 
     for round_number in (1, 2):
         for match in engine.pairings(tournament_id, round_number):
-            engine.submit_result(
+            report_and_confirm(
+                engine,
                 tournament_id,
-                match.match_id,
+                match,
                 winner=match.player_a,
                 games_won=2,
                 games_lost=1,
@@ -141,9 +165,11 @@ def test_replaying_the_history_reproduces_identical_state() -> None:
     engine = TournamentEngine()
     tournament_id = start_four_player_tournament(engine)
     for match in engine.pairings(tournament_id, round_number=1):
-        engine.submit_result(
+        assert match.player_b is not None
+        report_and_confirm(
+            engine,
             tournament_id,
-            match.match_id,
+            match,
             winner=match.player_b,
             games_won=2,
             games_lost=1,
@@ -171,8 +197,8 @@ def test_concurrent_tournaments_are_independent() -> None:
     engine.register_player(upcoming_id, "bob")
 
     match = engine.pairings(running_id, round_number=1)[0]
-    engine.submit_result(
-        running_id, match.match_id, winner=match.player_a, games_won=2, games_lost=0
+    report_and_confirm(
+        engine, running_id, match, winner=match.player_a, games_won=2, games_lost=0
     )
 
     assert engine.tournament(upcoming_id).phase == "registration"
@@ -229,12 +255,8 @@ def test_bye_goes_to_the_lowest_ranked_player_without_a_prior_bye() -> None:
     round_one = engine.pairings(tournament_id, round_number=1)
     (played,) = [m for m in round_one if not m.is_bye]
     (first_bye,) = [m for m in round_one if m.is_bye]
-    engine.submit_result(
-        tournament_id,
-        played.match_id,
-        winner=played.player_a,
-        games_won=2,
-        games_lost=0,
+    report_and_confirm(
+        engine, tournament_id, played, winner=played.player_a, games_won=2, games_lost=0
     )
 
     # Standings: winner 3, round-1 bye 3, loser 0. The loser is the lowest
@@ -280,8 +302,8 @@ def test_property_no_tournament_ever_repeats_an_opponent_or_doubles_a_bye(
                 met.add(pair)
                 paired_players.extend(pair)
                 winner = results_rng.choice((match.player_a, match.player_b))
-                engine.submit_result(
-                    tournament_id, match.match_id, winner, games_won=2, games_lost=1
+                report_and_confirm(
+                    engine, tournament_id, match, winner, games_won=2, games_lost=1
                 )
             assert sorted(paired_players) == sorted(players)
 
@@ -298,8 +320,9 @@ def test_pairings_show_results_as_they_come_in() -> None:
     first, second = engine.pairings(tournament_id, round_number=1)
     assert first.winner is None and second.winner is None
 
-    engine.submit_result(
-        tournament_id, first.match_id, winner=first.player_b, games_won=2, games_lost=1
+    assert first.player_b is not None
+    report_and_confirm(
+        engine, tournament_id, first, winner=first.player_b, games_won=2, games_lost=1
     )
 
     first, second = engine.pairings(tournament_id, round_number=1)
@@ -308,7 +331,7 @@ def test_pairings_show_results_as_they_come_in() -> None:
     assert second.winner is None
 
 
-def test_a_bye_match_does_not_accept_submitted_results() -> None:
+def test_a_bye_match_does_not_accept_reported_results() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in PLAYERS[:3]:
@@ -318,21 +341,27 @@ def test_a_bye_match_does_not_accept_submitted_results() -> None:
     (bye,) = [m for m in engine.pairings(tournament_id, round_number=1) if m.is_bye]
 
     with pytest.raises(EngineError):
-        engine.submit_result(
-            tournament_id, bye.match_id, winner=bye.player_a, games_won=2, games_lost=0
+        engine.report_result(
+            tournament_id,
+            bye.match_id,
+            reported_by=bye.player_a,
+            winner=bye.player_a,
+            games_won=2,
+            games_lost=0,
         )
 
 
-def test_submit_result_rejects_a_score_the_winner_did_not_win() -> None:
+def test_report_result_rejects_a_score_the_winner_did_not_win() -> None:
     engine = TournamentEngine()
     tournament_id = start_four_player_tournament(engine)
     match = engine.pairings(tournament_id, round_number=1)[0]
 
     for games_won, games_lost in ((1, 2), (1, 1), (-2, 0)):
         with pytest.raises(EngineError):
-            engine.submit_result(
+            engine.report_result(
                 tournament_id,
                 match.match_id,
+                reported_by=match.player_a,
                 winner=match.player_a,
                 games_won=games_won,
                 games_lost=games_lost,
@@ -343,8 +372,8 @@ def test_ending_early_freezes_standings_so_far() -> None:
     engine = TournamentEngine()
     tournament_id = start_four_player_tournament(engine)
     first, second = engine.pairings(tournament_id, round_number=1)
-    engine.submit_result(
-        tournament_id, first.match_id, winner=first.player_a, games_won=2, games_lost=0
+    report_and_confirm(
+        engine, tournament_id, first, winner=first.player_a, games_won=2, games_lost=0
     )
 
     engine.end_tournament(tournament_id)
@@ -352,9 +381,10 @@ def test_ending_early_freezes_standings_so_far() -> None:
     assert engine.tournament(tournament_id).phase == "completed"
     assert [row.match_points for row in engine.standings(tournament_id)] == [3, 0, 0, 0]
     with pytest.raises(EngineError):
-        engine.submit_result(
+        engine.report_result(
             tournament_id,
             second.match_id,
+            reported_by=second.player_a,
             winner=second.player_a,
             games_won=2,
             games_lost=0,
