@@ -1,7 +1,7 @@
 """Tests for SQLite persistence: action history saved as it happens, replay on load.
 
-Per the spec, the save/reload/replay-equality tests live at the engine facade
-seam: commands go through an engine opened with ``open_engine``, a restart is
+Per ticket #8 / spec #1, the save/reload/replay-equality tests live at the
+engine facade seam: commands go through an engine opened with ``open_engine``, a restart is
 simulated by reopening the same path, and equality is checked through the
 facade's queries and history — never by inspecting the database.
 """
@@ -53,7 +53,7 @@ def test_replaying_the_stored_history_yields_identical_state(tmp_path: Path) -> 
 
 
 def test_restart_mid_round_loses_nothing(tmp_path: Path) -> None:
-    """The ticket's crash scenario: a Pending result, an open Dispute, and a
+    """Ticket #8's crash scenario: a Pending result, an open Dispute, and a
     Sealed Deck in a second Tournament all survive, and play just continues."""
     db = tmp_path / "tournaments.db"
     engine = open_engine(db)
@@ -79,7 +79,7 @@ def test_restart_mid_round_loses_nothing(tmp_path: Path) -> None:
         tournament_id, disputed.match_id, disputed_by=disputed.player_b
     )
     next_week = engine.create_tournament(name="Weekly Riftbound #2")
-    register_with_deck(engine, next_week, "erin")
+    erins_deck = register_with_deck(engine, next_week, "erin")
 
     reloaded = open_engine(db)
 
@@ -88,7 +88,7 @@ def test_restart_mid_round_loses_nothing(tmp_path: Path) -> None:
     assert statuses[pending.match_id] == "pending"
     assert statuses[disputed.match_id] == "disputed"
     # The other Tournament's Deck is still there — and still Sealed.
-    assert reloaded.deck(next_week, "erin", requested_by="erin") == "erin's decklist"
+    assert reloaded.deck(next_week, "erin", requested_by="erin") == erins_deck
     with pytest.raises(EngineError, match="Sealed"):
         reloaded.deck(next_week, "erin", requested_by="alice")
     # Play continues on the reloaded engine, and its actions persist too:
@@ -143,6 +143,35 @@ def test_every_action_is_persisted_the_moment_it_happens(tmp_path: Path) -> None
     assert len(open_engine(db).history) == 2
     engine.submit_deck(tournament_id, "alice", DECK)
     assert open_engine(db).history == engine.history
+
+
+def test_a_failed_persist_rolls_the_engine_back_in_step_with_the_log() -> None:
+    """If the log cannot take the action, the command fails and the engine
+    unwinds it: memory never runs ahead of disk, and the caller can simply
+    retry once the disk recovers."""
+    persisted: list = []
+    failing = False
+
+    def flaky_sink(action) -> None:
+        if failing:
+            raise OSError("disk full")
+        persisted.append(action)
+
+    engine = TournamentEngine(sink=flaky_sink)
+    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.register_player(tournament_id, "alice")
+
+    failing = True
+    with pytest.raises(OSError):
+        engine.register_player(tournament_id, "bob")
+
+    assert engine.history == tuple(persisted)
+    assert engine.tournament(tournament_id).players == ("alice",)
+
+    failing = False
+    engine.register_player(tournament_id, "bob")
+    assert engine.tournament(tournament_id).players == ("alice", "bob")
+    assert engine.history == tuple(persisted)
 
 
 def test_full_lifecycle_with_draw_drop_bye_and_early_end_round_trips(

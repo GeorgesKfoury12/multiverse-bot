@@ -18,7 +18,7 @@ from multiverse_bot.engine.actions import Action
 
 # Actions are flat frozen dataclasses of str/int/None fields, so a JSON dict
 # keyed by the class name round-trips them exactly.
-_ACTION_TYPES: dict[str, type] = {cls.__name__: cls for cls in get_args(Action)}
+_ACTION_TYPES: dict[str, type[Action]] = {cls.__name__: cls for cls in get_args(Action)}
 
 
 class SqliteActionStore:

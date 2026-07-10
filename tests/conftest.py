@@ -7,10 +7,15 @@ PLAYERS = ("alice", "bob", "carol", "dave")
 
 def register_with_deck(
     engine: TournamentEngine, tournament_id: str, player_id: str
-) -> None:
-    """Register and submit a placeholder Deck, keeping the start gate open."""
+) -> str:
+    """Register and submit a placeholder Deck, keeping the start gate open.
+
+    Returns the submitted Deck so assertions never hard-code its format.
+    """
+    deck = f"{player_id}'s decklist"
     engine.register_player(tournament_id, player_id)
-    engine.submit_deck(tournament_id, player_id, f"{player_id}'s decklist")
+    engine.submit_deck(tournament_id, player_id, deck)
+    return deck
 
 
 def create_tournament_with_players(
