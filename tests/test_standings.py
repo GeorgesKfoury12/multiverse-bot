@@ -44,6 +44,7 @@ def standings_rows(
 def test_worked_example_gw_breaks_a_match_point_and_omw_tie() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in ("alice", "bob", "carol", "dave"):
         register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
@@ -84,6 +85,7 @@ def test_worked_example_gw_breaks_a_match_point_and_omw_tie() -> None:
 def test_worked_example_byes_are_excluded_from_the_byed_players_tiebreakers() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in ("alice", "bob", "carol"):
         register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
@@ -123,6 +125,7 @@ def test_worked_example_byes_are_excluded_from_the_byed_players_tiebreakers() ->
 def test_players_tied_through_the_whole_stack_share_the_placement() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in ("alice", "bob", "carol", "dave"):
         register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
@@ -190,6 +193,7 @@ def test_scoring_comes_from_the_ruleset_config_not_engine_constants(
 
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Toy Cup", game="toygame")
+    engine.open_registration(tournament_id)
     for player_id in ("alice", "bob", "carol"):
         register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
@@ -230,6 +234,7 @@ def test_scoring_comes_from_the_ruleset_config_not_engine_constants(
 def test_riftbound_is_the_default_game() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in ("alice", "bob", "carol"):
         register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)

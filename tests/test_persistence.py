@@ -27,6 +27,7 @@ def test_registration_phase_state_survives_a_restart(tmp_path: Path) -> None:
     db = tmp_path / "tournaments.db"
     engine = open_engine(db)
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     engine.register_player(tournament_id, "alice")
     engine.register_player(tournament_id, "bob")
     engine.submit_deck(tournament_id, "alice", DECK)
@@ -43,6 +44,7 @@ def test_replaying_the_stored_history_yields_identical_state(tmp_path: Path) -> 
     db = tmp_path / "tournaments.db"
     engine = open_engine(db)
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     engine.register_player(tournament_id, "alice")
     engine.submit_deck(tournament_id, "alice", DECK)
 
@@ -79,6 +81,7 @@ def test_restart_mid_round_loses_nothing(tmp_path: Path) -> None:
         tournament_id, disputed.match_id, disputed_by=disputed.player_b
     )
     next_week = engine.create_tournament(name="Weekly Riftbound #2")
+    engine.open_registration(next_week)
     erins_deck = register_with_deck(engine, next_week, "erin")
 
     reloaded = open_engine(db)
@@ -139,8 +142,10 @@ def test_every_action_is_persisted_the_moment_it_happens(tmp_path: Path) -> None
     engine = open_engine(db)
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     assert len(open_engine(db).history) == 1
-    engine.register_player(tournament_id, "alice")
+    engine.open_registration(tournament_id)
     assert len(open_engine(db).history) == 2
+    engine.register_player(tournament_id, "alice")
+    assert len(open_engine(db).history) == 3
     engine.submit_deck(tournament_id, "alice", DECK)
     assert open_engine(db).history == engine.history
 
@@ -159,6 +164,7 @@ def test_a_failed_persist_rolls_the_engine_back_in_step_with_the_log() -> None:
 
     engine = TournamentEngine(sink=flaky_sink)
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     engine.register_player(tournament_id, "alice")
 
     failing = True

@@ -16,6 +16,7 @@ DECK = "https://cdn.discordapp.com/attachments/123/456/alice-deck.png"
 def test_registered_player_submits_a_deck_and_reads_it_back_verbatim() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     engine.register_player(tournament_id, "alice")
 
     engine.submit_deck(tournament_id, "alice", DECK)
@@ -26,6 +27,7 @@ def test_registered_player_submits_a_deck_and_reads_it_back_verbatim() -> None:
 def test_resubmitting_replaces_the_deck_and_only_the_latest_counts() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     engine.register_player(tournament_id, "alice")
 
     engine.submit_deck(tournament_id, "alice", "first draft")
@@ -37,6 +39,7 @@ def test_resubmitting_replaces_the_deck_and_only_the_latest_counts() -> None:
 def test_only_registered_players_can_submit_a_deck() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     engine.register_player(tournament_id, "alice")
 
     with pytest.raises(EngineError):
@@ -46,6 +49,7 @@ def test_only_registered_players_can_submit_a_deck() -> None:
 def test_sealed_deck_is_hidden_from_everyone_but_its_owner_and_the_to() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     engine.register_player(tournament_id, "alice")
     engine.register_player(tournament_id, "bob")
     engine.submit_deck(tournament_id, "alice", DECK)
@@ -63,6 +67,7 @@ def test_sealed_deck_is_hidden_from_everyone_but_its_owner_and_the_to() -> None:
 def test_start_is_refused_naming_exactly_the_players_missing_a_deck() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in ("alice", "bob", "carol", "dave"):
         engine.register_player(tournament_id, player_id)
     engine.submit_deck(tournament_id, "alice", DECK)
@@ -87,6 +92,7 @@ def test_start_is_refused_naming_exactly_the_players_missing_a_deck() -> None:
 def test_start_reveals_every_deck_to_everyone_at_once() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in ("alice", "bob"):
         register_with_deck(engine, tournament_id, player_id)
 
@@ -103,6 +109,7 @@ def test_start_reveals_every_deck_to_everyone_at_once() -> None:
 def test_decks_are_immutable_once_the_tournament_starts() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in ("alice", "bob"):
         register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
@@ -115,6 +122,7 @@ def test_decks_are_immutable_once_the_tournament_starts() -> None:
 def test_querying_a_player_who_never_submitted_says_so() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     engine.register_player(tournament_id, "alice")
 
     with pytest.raises(EngineError):
@@ -126,6 +134,7 @@ def test_querying_a_player_who_never_submitted_says_so() -> None:
 def test_replaying_the_history_reproduces_deck_state() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
     for player_id in ("alice", "bob"):
         engine.register_player(tournament_id, player_id)
     engine.submit_deck(tournament_id, "alice", "first draft")

@@ -16,6 +16,8 @@ from multiverse_bot.engine.actions import (
     DeckSubmitted,
     PlayerDropped,
     PlayerRegistered,
+    RegistrationClosed,
+    RegistrationOpened,
     ResultAssigned,
     ResultConfirmed,
     ResultDisputed,
@@ -35,6 +37,12 @@ from multiverse_bot.engine.tiebreakers import (
 
 class EngineError(Exception):
     """A command that the tournament's current state does not allow."""
+
+
+# Phases before the Tournament starts: Decks are submittable and Sealed.
+# ``setup`` precedes the signup window opening; ``registration_closed`` is the
+# straggler window — roster final, Decks still being chased.
+_PRE_START_PHASES = ("setup", "registration", "registration_closed")
 
 
 @dataclass(frozen=True)
@@ -143,7 +151,7 @@ class _TournamentState:
     tournament_id: str
     name: str
     ruleset: Ruleset
-    phase: str = "registration"
+    phase: str = "setup"
     players: list[str] = field(default_factory=list)
     decks: dict[str, str] = field(default_factory=dict)
     seed: int | None = None
@@ -200,10 +208,29 @@ class TournamentEngine:
         self._record(TournamentCreated(tournament_id, name, game))
         return tournament_id
 
+    def open_registration(self, tournament_id: str) -> None:
+        """The TO opens — or, after a close, reopens — the signup window
+        (spec #1 story 8)."""
+        tournament = self._tournament_state(tournament_id)
+        if tournament.phase not in ("setup", "registration_closed"):
+            raise EngineError(
+                f"registration for {tournament_id} cannot open from "
+                f"phase {tournament.phase}"
+            )
+        self._record(RegistrationOpened(tournament_id))
+
+    def close_registration(self, tournament_id: str) -> None:
+        """The TO closes the signup window, finalizing the player count before
+        the start; Decks stay submittable until then (spec #1 story 8)."""
+        tournament = self._tournament_state(tournament_id)
+        if tournament.phase != "registration":
+            raise EngineError(f"registration for {tournament_id} is not open")
+        self._record(RegistrationClosed(tournament_id))
+
     def register_player(self, tournament_id: str, player_id: str) -> None:
         tournament = self._tournament_state(tournament_id)
         if tournament.phase != "registration":
-            raise EngineError(f"{tournament_id} is no longer open for registration")
+            raise EngineError(f"registration for {tournament_id} is not open")
         if player_id in tournament.players:
             raise EngineError(f"{player_id} is already registered in {tournament_id}")
         self._record(PlayerRegistered(tournament_id, player_id))
@@ -213,7 +240,7 @@ class TournamentEngine:
         replaces it (latest wins). Decks are immutable once the Tournament
         starts — they are Revealed as submitted, open-decklist."""
         tournament = self._tournament_state(tournament_id)
-        if tournament.phase != "registration":
+        if tournament.phase not in _PRE_START_PHASES:
             raise EngineError(
                 f"{tournament_id} has started; Decks are Revealed and immutable"
             )
@@ -231,7 +258,7 @@ class TournamentEngine:
         the override is too short for a sole undefeated winner to be possible.
         """
         tournament = self._tournament_state(tournament_id)
-        if tournament.phase != "registration":
+        if tournament.phase not in _PRE_START_PHASES:
             raise EngineError(f"{tournament_id} has already started")
         player_count = len(tournament.players)
         if player_count < 2:
@@ -408,6 +435,13 @@ class TournamentEngine:
 
     # -- queries -----------------------------------------------------------
 
+    def tournaments(self) -> tuple[Tournament, ...]:
+        """Every Tournament ever created, in creation order — callers filter
+        by phase (e.g. to find the one active Tournament to default to)."""
+        return tuple(
+            self.tournament(tournament_id) for tournament_id in self._tournaments
+        )
+
     def tournament(self, tournament_id: str) -> Tournament:
         state = self._tournament_state(tournament_id)
         return Tournament(
@@ -424,7 +458,7 @@ class TournamentEngine:
         """The player's Deck, as a player sees it: Sealed until the Tournament
         starts (owner-only), Revealed to anyone afterwards (open decklist)."""
         state = self._tournament_state(tournament_id)
-        if state.phase == "registration" and requested_by != player_id:
+        if state.phase in _PRE_START_PHASES and requested_by != player_id:
             raise EngineError(
                 f"{player_id}'s Deck is Sealed until {tournament_id} starts"
             )
@@ -517,6 +551,10 @@ class TournamentEngine:
                     tournament_id=tournament_id, name=name, ruleset=RULESETS[game]
                 )
                 self._created_count += 1
+            case RegistrationOpened(tournament_id=tournament_id):
+                self._tournaments[tournament_id].phase = "registration"
+            case RegistrationClosed(tournament_id=tournament_id):
+                self._tournaments[tournament_id].phase = "registration_closed"
             case PlayerRegistered(tournament_id=tournament_id, player_id=player_id):
                 self._tournaments[tournament_id].players.append(player_id)
             case DeckSubmitted(
