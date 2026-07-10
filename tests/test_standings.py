@@ -9,6 +9,7 @@ Pairings, which keeps the arithmetic valid under any pairing shuffle.
 from fractions import Fraction
 
 import pytest
+from conftest import register_with_deck
 from conftest import report_and_confirm as submit
 
 from multiverse_bot.engine import (
@@ -44,7 +45,7 @@ def test_worked_example_gw_breaks_a_match_point_and_omw_tie() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in ("alice", "bob", "carol", "dave"):
-        engine.register_player(tournament_id, player_id)
+        register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
 
     # Name players by Round 1 seats: A vs B, C vs D.
@@ -84,7 +85,7 @@ def test_worked_example_byes_are_excluded_from_the_byed_players_tiebreakers() ->
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in ("alice", "bob", "carol"):
-        engine.register_player(tournament_id, player_id)
+        register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
 
     # Round 1: A beats B 2-0; C has the Bye.
@@ -123,7 +124,7 @@ def test_players_tied_through_the_whole_stack_share_the_placement() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in ("alice", "bob", "carol", "dave"):
-        engine.register_player(tournament_id, player_id)
+        register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
 
     # Every result 2-0: A beats B, C beats D, then A beats C, B beats D.
@@ -190,7 +191,7 @@ def test_scoring_comes_from_the_ruleset_config_not_engine_constants(
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Toy Cup", game="toygame")
     for player_id in ("alice", "bob", "carol"):
-        engine.register_player(tournament_id, player_id)
+        register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
 
     round_one = engine.pairings(tournament_id, round_number=1)
@@ -230,7 +231,7 @@ def test_riftbound_is_the_default_game() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in ("alice", "bob", "carol"):
-        engine.register_player(tournament_id, player_id)
+        register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
 
     (bye,) = [m for m in engine.pairings(tournament_id, 1) if m.is_bye]

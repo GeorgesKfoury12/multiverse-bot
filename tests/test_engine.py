@@ -10,7 +10,12 @@ import subprocess
 import sys
 
 import pytest
-from conftest import PLAYERS, report_and_confirm, start_four_player_tournament
+from conftest import (
+    PLAYERS,
+    register_with_deck,
+    report_and_confirm,
+    start_four_player_tournament,
+)
 
 from multiverse_bot.engine import EngineError, TournamentEngine
 
@@ -179,7 +184,7 @@ def test_odd_player_count_starts_with_a_bye_scored_as_a_two_zero_win() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in PLAYERS[:3]:
-        engine.register_player(tournament_id, player_id)
+        register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
 
     pairings = engine.pairings(tournament_id, round_number=1)
@@ -205,7 +210,7 @@ def test_round_one_bye_recipient_varies_with_the_seed() -> None:
         engine = TournamentEngine()
         tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
         for player_id in PLAYERS[:3]:
-            engine.register_player(tournament_id, player_id)
+            register_with_deck(engine, tournament_id, player_id)
         engine.start_tournament(tournament_id, seed=seed)
         (bye,) = [m for m in engine.pairings(tournament_id, round_number=1) if m.is_bye]
         recipients.add(bye.player_a)
@@ -218,7 +223,7 @@ def test_bye_goes_to_the_lowest_ranked_player_without_a_prior_bye() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in PLAYERS[:3]:
-        engine.register_player(tournament_id, player_id)
+        register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
 
     round_one = engine.pairings(tournament_id, round_number=1)
@@ -250,7 +255,7 @@ def test_property_no_tournament_ever_repeats_an_opponent_or_doubles_a_bye(
         tournament_id = engine.create_tournament(name=f"prop-{player_count}-{seed}")
         players = [f"p{i}" for i in range(player_count)]
         for player_id in players:
-            engine.register_player(tournament_id, player_id)
+            register_with_deck(engine, tournament_id, player_id)
         engine.start_tournament(tournament_id, seed=seed)
 
         results_rng = random.Random(seed)
@@ -304,7 +309,7 @@ def test_a_bye_match_does_not_accept_reported_results() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in PLAYERS[:3]:
-        engine.register_player(tournament_id, player_id)
+        register_with_deck(engine, tournament_id, player_id)
     engine.start_tournament(tournament_id, seed=42)
 
     (bye,) = [m for m in engine.pairings(tournament_id, round_number=1) if m.is_bye]

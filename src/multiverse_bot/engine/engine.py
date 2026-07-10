@@ -13,6 +13,7 @@ from fractions import Fraction
 
 from multiverse_bot.engine.actions import (
     Action,
+    DeckSubmitted,
     PlayerDropped,
     PlayerRegistered,
     ResultAssigned,
@@ -144,6 +145,7 @@ class _TournamentState:
     ruleset: Ruleset
     phase: str = "registration"
     players: list[str] = field(default_factory=list)
+    decks: dict[str, str] = field(default_factory=dict)
     seed: int | None = None
     round_count: int | None = None
     current_round: int | None = None
@@ -193,6 +195,19 @@ class TournamentEngine:
             raise EngineError(f"{player_id} is already registered in {tournament_id}")
         self._record(PlayerRegistered(tournament_id, player_id))
 
+    def submit_deck(self, tournament_id: str, player_id: str, deck: str) -> None:
+        """The player locks in their Deck; resubmitting before the start
+        replaces it (latest wins). Decks are immutable once the Tournament
+        starts — they are Revealed as submitted, open-decklist."""
+        tournament = self._tournament_state(tournament_id)
+        if tournament.phase != "registration":
+            raise EngineError(
+                f"{tournament_id} has started; Decks are Revealed and immutable"
+            )
+        if player_id not in tournament.players:
+            raise EngineError(f"{player_id} is not registered in {tournament_id}")
+        self._record(DeckSubmitted(tournament_id, player_id, deck))
+
     def start_tournament(
         self, tournament_id: str, seed: int, round_count: int | None = None
     ) -> str | None:
@@ -208,6 +223,12 @@ class TournamentEngine:
         player_count = len(tournament.players)
         if player_count < 2:
             raise EngineError(f"{tournament_id} needs at least 2 players to start")
+        missing = [p for p in tournament.players if p not in tournament.decks]
+        if missing:
+            # Naming exactly who is missing hands the TO their chase list.
+            raise EngineError(
+                f"{tournament_id} cannot start: no Deck from {', '.join(missing)}"
+            )
         warning = None
         if round_count is not None:
             # Fresh opponents run out after a round robin: n-1 rounds for an
@@ -386,6 +407,30 @@ class TournamentEngine:
             dropped=tuple(state.dropped),
         )
 
+    def deck(self, tournament_id: str, player_id: str, requested_by: str) -> str:
+        """The player's Deck, as a player sees it: Sealed until the Tournament
+        starts (owner-only), Revealed to anyone afterwards (open decklist)."""
+        state = self._tournament_state(tournament_id)
+        if state.phase == "registration" and requested_by != player_id:
+            raise EngineError(
+                f"{player_id}'s Deck is Sealed until {tournament_id} starts"
+            )
+        return self._submitted_deck(state, player_id)
+
+    def deck_as_to(self, tournament_id: str, player_id: str) -> str:
+        """The player's Deck, Sealed or Revealed — the TO sees Decks at any
+        time. The engine cannot know Discord roles; the caller is responsible
+        for only routing TOs here."""
+        state = self._tournament_state(tournament_id)
+        return self._submitted_deck(state, player_id)
+
+    @staticmethod
+    def _submitted_deck(state: _TournamentState, player_id: str) -> str:
+        deck = state.decks.get(player_id)
+        if deck is None:
+            raise EngineError(f"{player_id} has no Deck in {state.tournament_id}")
+        return deck
+
     def pairings(self, tournament_id: str, round_number: int) -> tuple[Match, ...]:
         state = self._tournament_state(tournament_id)
         if round_number not in state.rounds:
@@ -448,6 +493,10 @@ class TournamentEngine:
                 self._created_count += 1
             case PlayerRegistered(tournament_id=tournament_id, player_id=player_id):
                 self._tournaments[tournament_id].players.append(player_id)
+            case DeckSubmitted(
+                tournament_id=tournament_id, player_id=player_id, deck=deck
+            ):
+                self._tournaments[tournament_id].decks[player_id] = deck
             case TournamentStarted(
                 tournament_id=tournament_id, seed=seed, round_count=round_count
             ):
