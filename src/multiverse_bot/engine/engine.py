@@ -18,6 +18,7 @@ from multiverse_bot.engine.actions import (
     TournamentEnded,
     TournamentStarted,
 )
+from multiverse_bot.engine.pairing import pair_round
 
 # House default per ADR-0002; lifted into per-Game ruleset config by a later ticket.
 _MATCH_POINTS_PER_WIN = 3
@@ -41,15 +42,24 @@ class Tournament:
 
 @dataclass(frozen=True)
 class Match:
-    """One Match of a Round's Pairings; result fields are None until submitted."""
+    """One Match of a Round's Pairings; result fields are None until submitted.
+
+    A Bye is a Match with no opponent (``player_b is None``): it comes
+    pre-scored as a 2-0 win for ``player_a`` and stays marked so Tiebreaker
+    exclusion can find it later.
+    """
 
     match_id: str
     round_number: int
     player_a: str
-    player_b: str
+    player_b: str | None
     winner: str | None = None
     games_won: int | None = None
     games_lost: int | None = None
+
+    @property
+    def is_bye(self) -> bool:
+        return self.player_b is None
 
 
 @dataclass(frozen=True)
@@ -75,6 +85,7 @@ class _TournamentState:
     results_by_match: dict[str, tuple[str, int, int]] = field(default_factory=dict)
     match_points: dict[str, int] = field(default_factory=dict)
     opponents: dict[str, set[str]] = field(default_factory=dict)
+    byes: set[str] = field(default_factory=set)
 
 
 class TournamentEngine:
@@ -117,11 +128,6 @@ class TournamentEngine:
             raise EngineError(f"{tournament_id} has already started")
         if len(tournament.players) < 2:
             raise EngineError(f"{tournament_id} needs at least 2 players to start")
-        if len(tournament.players) % 2:
-            raise EngineError(
-                f"{tournament_id} has an odd player count "
-                f"({len(tournament.players)}); Byes are not supported yet"
-            )
         self._record(TournamentStarted(tournament_id, seed))
 
     def submit_result(
@@ -252,22 +258,27 @@ class TournamentEngine:
         state.current_round = round_number
         rng = random.Random(f"{state.seed}:{round_number}")
 
-        # Random order within each Score Group, groups from most points down;
-        # pair-downs happen only at group boundaries of this flattened order.
+        # Score Groups from most points down, random order within each group;
+        # pair_round pairs within groups where possible, minimizes pair-downs,
+        # never repeats an opponent, and grants the Bye on odd counts.
         by_points: dict[int, list[str]] = {}
         for player in state.players:
             by_points.setdefault(state.match_points[player], []).append(player)
-        ordered: list[str] = []
+        groups: list[list[str]] = []
         for points in sorted(by_points, reverse=True):
             group = by_points[points]
             rng.shuffle(group)
-            ordered.extend(group)
+            groups.append(group)
 
-        pairs = _pair_without_rematch(ordered, state.opponents)
-        if pairs is None:
-            # No rematch-free pairing exists in this order; the guaranteed
-            # matching algorithm is a later ticket. Pair adjacent as fallback.
-            pairs = list(zip(ordered[::2], ordered[1::2]))
+        pairing = pair_round(groups, state.opponents, state.byes)
+        if pairing is None:
+            # Unreachable while opponents come only from Swiss rounds of this
+            # engine (ceil(log2 n) rounds always admit a rematch-free pairing);
+            # kept as a hard stop so a future bug can't silently pair a rematch.
+            raise EngineError(
+                f"{state.tournament_id} has no rematch-free pairing "
+                f"for round {round_number}"
+            )
 
         matches = [
             Match(
@@ -276,13 +287,31 @@ class TournamentEngine:
                 player_a=player_a,
                 player_b=player_b,
             )
-            for index, (player_a, player_b) in enumerate(pairs)
+            for index, (player_a, player_b) in enumerate(pairing.pairs)
         ]
+        if pairing.bye is not None:
+            matches.append(
+                Match(
+                    match_id=f"{state.tournament_id}-R{round_number}"
+                    f"-M{len(pairing.pairs) + 1}",
+                    round_number=round_number,
+                    player_a=pairing.bye,
+                    player_b=None,
+                )
+            )
         state.rounds[round_number] = matches
         for match in matches:
             state.matches_by_id[match.match_id] = match
+            if match.player_b is None:
+                continue
             state.opponents[match.player_a].add(match.player_b)
             state.opponents[match.player_b].add(match.player_a)
+        if pairing.bye is not None:
+            # A Bye scores as a 2-0 win immediately; it never blocks the Round.
+            bye_match_id = matches[-1].match_id
+            state.results_by_match[bye_match_id] = (pairing.bye, 2, 0)
+            state.match_points[pairing.bye] += _MATCH_POINTS_PER_WIN
+            state.byes.add(pairing.bye)
 
     @staticmethod
     def _with_result(state: _TournamentState, match: Match) -> Match:
@@ -297,19 +326,3 @@ class TournamentEngine:
             return self._tournaments[tournament_id]
         except KeyError:
             raise EngineError(f"no such tournament: {tournament_id}") from None
-
-
-def _pair_without_rematch(
-    ordered: list[str], opponents: dict[str, set[str]]
-) -> list[tuple[str, str]] | None:
-    """Pair players in the given order, backtracking to avoid any rematch."""
-    if not ordered:
-        return []
-    first, rest = ordered[0], ordered[1:]
-    for index, candidate in enumerate(rest):
-        if candidate in opponents[first]:
-            continue
-        tail = _pair_without_rematch(rest[:index] + rest[index + 1 :], opponents)
-        if tail is not None:
-            return [(first, candidate), *tail]
-    return None

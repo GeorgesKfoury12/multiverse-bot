@@ -5,6 +5,7 @@ state out. If a test needs to reach past the facade, the facade is missing a
 query.
 """
 
+import random
 import subprocess
 import sys
 
@@ -179,14 +180,101 @@ def test_concurrent_tournaments_are_independent() -> None:
     assert {row.match_points for row in engine.standings(running_id)} == {0, 3}
 
 
-def test_start_rejects_odd_player_counts_until_byes_exist() -> None:
+def test_odd_player_count_starts_with_a_bye_scored_as_a_two_zero_win() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in PLAYERS[:3]:
         engine.register_player(tournament_id, player_id)
+    engine.start_tournament(tournament_id, seed=42)
 
-    with pytest.raises(EngineError):
-        engine.start_tournament(tournament_id, seed=42)
+    pairings = engine.pairings(tournament_id, round_number=1)
+    byes = [match for match in pairings if match.is_bye]
+    real = [match for match in pairings if not match.is_bye]
+    assert len(byes) == 1 and len(real) == 1
+
+    (bye,) = byes
+    assert bye.player_b is None
+    assert bye.winner == bye.player_a
+    assert (bye.games_won, bye.games_lost) == (2, 0)
+    # The byed player holds 3 Match Points before any result comes in.
+    standings = {
+        row.player_id: row.match_points for row in engine.standings(tournament_id)
+    }
+    assert standings[bye.player_a] == 3
+    assert {bye.player_a, real[0].player_a, real[0].player_b} == set(PLAYERS[:3])
+
+
+def test_bye_goes_to_the_lowest_ranked_player_without_a_prior_bye() -> None:
+    engine = TournamentEngine()
+    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    for player_id in PLAYERS[:3]:
+        engine.register_player(tournament_id, player_id)
+    engine.start_tournament(tournament_id, seed=42)
+
+    round_one = engine.pairings(tournament_id, round_number=1)
+    (played,) = [m for m in round_one if not m.is_bye]
+    (first_bye,) = [m for m in round_one if m.is_bye]
+    engine.submit_result(
+        tournament_id,
+        played.match_id,
+        winner=played.player_a,
+        games_won=2,
+        games_lost=0,
+    )
+
+    # Standings: winner 3, round-1 bye 3, loser 0. The loser is the lowest
+    # ranked of the two bye-less players, so the round-2 Bye is theirs, and
+    # the winner pairs down against the round-1 bye.
+    round_two = engine.pairings(tournament_id, round_number=2)
+    (second_bye,) = [m for m in round_two if m.is_bye]
+    (pair_down,) = [m for m in round_two if not m.is_bye]
+    assert second_bye.player_a == played.player_b
+    assert {pair_down.player_a, pair_down.player_b} == {
+        played.player_a,
+        first_bye.player_a,
+    }
+
+
+@pytest.mark.parametrize("player_count", range(3, 11))
+def test_property_no_tournament_ever_repeats_an_opponent_or_doubles_a_bye(
+    player_count: int,
+) -> None:
+    for seed in range(25):
+        engine = TournamentEngine()
+        tournament_id = engine.create_tournament(name=f"prop-{player_count}-{seed}")
+        players = [f"p{i}" for i in range(player_count)]
+        for player_id in players:
+            engine.register_player(tournament_id, player_id)
+        engine.start_tournament(tournament_id, seed=seed)
+
+        results_rng = random.Random(seed)
+        met: set[frozenset[str]] = set()
+        byes: list[str] = []
+        while engine.tournament(tournament_id).phase == "in_progress":
+            round_number = engine.tournament(tournament_id).current_round
+            assert round_number is not None
+            paired_players: list[str] = []
+            for match in engine.pairings(tournament_id, round_number):
+                if match.is_bye:
+                    byes.append(match.player_a)
+                    paired_players.append(match.player_a)
+                    continue
+                assert match.player_b is not None
+                pair = frozenset((match.player_a, match.player_b))
+                assert pair not in met, f"rematch in round {round_number}: {pair}"
+                met.add(pair)
+                paired_players.extend(pair)
+                winner = results_rng.choice((match.player_a, match.player_b))
+                engine.submit_result(
+                    tournament_id, match.match_id, winner, games_won=2, games_lost=1
+                )
+            assert sorted(paired_players) == sorted(players)
+
+        if player_count % 2 == 0:
+            assert byes == []
+        else:
+            assert len(byes) == engine.tournament(tournament_id).round_count
+            assert len(byes) == len(set(byes)), f"second bye: {byes}"
 
 
 def test_pairings_show_results_as_they_come_in() -> None:
@@ -203,6 +291,21 @@ def test_pairings_show_results_as_they_come_in() -> None:
     assert first.winner == first.player_b
     assert (first.games_won, first.games_lost) == (2, 1)
     assert second.winner is None
+
+
+def test_a_bye_match_does_not_accept_submitted_results() -> None:
+    engine = TournamentEngine()
+    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    for player_id in PLAYERS[:3]:
+        engine.register_player(tournament_id, player_id)
+    engine.start_tournament(tournament_id, seed=42)
+
+    (bye,) = [m for m in engine.pairings(tournament_id, round_number=1) if m.is_bye]
+
+    with pytest.raises(EngineError):
+        engine.submit_result(
+            tournament_id, bye.match_id, winner=bye.player_a, games_won=2, games_lost=0
+        )
 
 
 def test_submit_result_rejects_a_score_the_winner_did_not_win() -> None:
