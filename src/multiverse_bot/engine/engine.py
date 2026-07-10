@@ -263,7 +263,7 @@ class TournamentEngine:
         player_count = len(tournament.players)
         if player_count < 2:
             raise EngineError(f"{tournament_id} needs at least 2 players to start")
-        missing = [p for p in tournament.players if p not in tournament.decks]
+        missing = self.players_missing_decks(tournament_id)
         if missing:
             # Naming exactly who is missing hands the TO their chase list.
             raise EngineError(
@@ -453,6 +453,13 @@ class TournamentEngine:
             current_round=state.current_round,
             dropped=tuple(state.dropped),
         )
+
+    def players_missing_decks(self, tournament_id: str) -> tuple[str, ...]:
+        """The registered players with no Deck on file, in registration order —
+        the start gate's chase list, exposed so callers can render it (e.g. as
+        Discord mentions) before attempting the start."""
+        state = self._tournament_state(tournament_id)
+        return tuple(p for p in state.players if p not in state.decks)
 
     def deck(self, tournament_id: str, player_id: str, requested_by: str) -> str:
         """The player's Deck, as a player sees it: Sealed until the Tournament

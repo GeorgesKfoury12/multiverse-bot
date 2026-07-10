@@ -89,6 +89,22 @@ def test_start_is_refused_naming_exactly_the_players_missing_a_deck() -> None:
     assert engine.tournament(tournament_id).phase == "in_progress"
 
 
+def test_players_missing_decks_names_stragglers_in_registration_order() -> None:
+    engine = TournamentEngine()
+    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
+    for player_id in ("alice", "bob", "carol", "dave"):
+        engine.register_player(tournament_id, player_id)
+    engine.submit_deck(tournament_id, "carol", DECK)
+
+    assert engine.players_missing_decks(tournament_id) == ("alice", "bob", "dave")
+
+    engine.submit_deck(tournament_id, "alice", DECK)
+    engine.submit_deck(tournament_id, "bob", DECK)
+    engine.submit_deck(tournament_id, "dave", DECK)
+    assert engine.players_missing_decks(tournament_id) == ()
+
+
 def test_start_reveals_every_deck_to_everyone_at_once() -> None:
     engine = TournamentEngine()
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
