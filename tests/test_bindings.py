@@ -41,6 +41,18 @@ def test_match_threads_survive_a_restart(tmp_path: Path) -> None:
     assert reloaded.match_thread("T1-R1-M3") is None
 
 
+def test_a_thread_resolves_back_to_its_match(tmp_path: Path) -> None:
+    """The result flow starts from a Discord thread (ticket #10): the store
+    must answer "which Match lives here?", not just the forward direction."""
+    store = BindingsStore(tmp_path / "tournaments.db")
+    store.save_match_thread("T1-R1-M1", 555)
+    store.save_match_thread("T1-R1-M2", 666)
+
+    assert store.match_for_thread(555) == "T1-R1-M1"
+    assert store.match_for_thread(666) == "T1-R1-M2"
+    assert store.match_for_thread(777) is None
+
+
 def test_bindings_share_the_database_file_with_the_action_log(
     tmp_path: Path,
 ) -> None:
