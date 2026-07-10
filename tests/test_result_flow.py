@@ -8,6 +8,7 @@ missing a query.
 from fractions import Fraction
 
 import pytest
+from conftest import PLAYERS, start_four_player_tournament
 
 from multiverse_bot.engine import EngineError, Match, TournamentEngine
 from multiverse_bot.engine.actions import (
@@ -16,16 +17,6 @@ from multiverse_bot.engine.actions import (
     ResultDisputed,
     ResultReported,
 )
-
-PLAYERS = ("alice", "bob", "carol", "dave")
-
-
-def start_four_player_tournament(engine: TournamentEngine, seed: int = 42) -> str:
-    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
-    for player_id in PLAYERS:
-        engine.register_player(tournament_id, player_id)
-    engine.start_tournament(tournament_id, seed=seed)
-    return tournament_id
 
 
 def match_by_id(engine: TournamentEngine, tournament_id: str, match_id: str) -> Match:
@@ -216,8 +207,8 @@ def test_to_can_confirm_a_pending_or_disputed_result() -> None:
 
     # The TO resolves the Dispute by confirming the report as-is, and clears
     # the stalled Pending one; the Round then closes.
-    engine.to_confirm_result(tournament_id, first.match_id, actor="georges-to")
-    engine.to_confirm_result(tournament_id, second.match_id, actor="georges-to")
+    engine.confirm_result_as_to(tournament_id, first.match_id, actor="georges-to")
+    engine.confirm_result_as_to(tournament_id, second.match_id, actor="georges-to")
 
     assert match_by_id(engine, tournament_id, first.match_id).status == "confirmed"
     assert engine.tournament(tournament_id).current_round == 2
@@ -372,6 +363,26 @@ def test_a_drawn_match_scores_a_point_each_and_counts_in_tiebreakers() -> None:
     assert rows[first.player_b].match_points == 1
     # GW%: 1 win of 3 games played — the drawn game counts as played, not won.
     assert rows[first.player_a].gw == Fraction(1, 3)
+
+
+def test_a_report_cannot_exceed_the_best_of_three_game_count() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    first, _ = engine.pairings(tournament_id, round_number=1)
+
+    # 3-0 (a Bo3 ends at two wins), 2-1-1 and 2-0-2 (four games) are all
+    # impossible in a best-of-3 Match.
+    for games_won, games_lost, games_drawn in ((3, 0, 0), (2, 1, 1), (2, 0, 2)):
+        with pytest.raises(EngineError):
+            engine.report_result(
+                tournament_id,
+                first.match_id,
+                reported_by=first.player_a,
+                winner=first.player_a,
+                games_won=games_won,
+                games_lost=games_lost,
+                games_drawn=games_drawn,
+            )
 
 
 def test_a_draw_report_must_carry_a_drawn_score() -> None:

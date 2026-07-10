@@ -26,6 +26,8 @@ class Ruleset:
     """One Game's tournament-scoring policy."""
 
     game: str
+    # Games per Match; Riftbound's official rules confirm best-of-3.
+    best_of: int = 3
     match_points_win: int = 3
     match_points_draw: int = 1
     match_points_loss: int = 0

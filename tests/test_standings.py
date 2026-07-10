@@ -9,6 +9,7 @@ Pairings, which keeps the arithmetic valid under any pairing shuffle.
 from fractions import Fraction
 
 import pytest
+from conftest import report_and_confirm as submit
 
 from multiverse_bot.engine import (
     EngineError,
@@ -17,28 +18,6 @@ from multiverse_bot.engine import (
     RULESETS,
     TournamentEngine,
 )
-
-
-def submit(
-    engine: TournamentEngine,
-    tournament_id: str,
-    match: Match,
-    winner: str,
-    games_won: int,
-    games_lost: int,
-) -> None:
-    """The winner reports, the loser confirms — the shortest confirmed path."""
-    engine.report_result(
-        tournament_id,
-        match.match_id,
-        reported_by=winner,
-        winner=winner,
-        games_won=games_won,
-        games_lost=games_lost,
-    )
-    loser = match.player_b if winner == match.player_a else match.player_a
-    assert loser is not None
-    engine.confirm_result(tournament_id, match.match_id, confirmed_by=loser)
 
 
 def match_of(
