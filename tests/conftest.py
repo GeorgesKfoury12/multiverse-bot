@@ -5,10 +5,18 @@ from multiverse_bot.engine import Match, TournamentEngine
 PLAYERS = ("alice", "bob", "carol", "dave")
 
 
-def start_four_player_tournament(engine: TournamentEngine, seed: int = 42) -> str:
+def create_tournament_with_players(
+    engine: TournamentEngine, players: tuple[str, ...] = PLAYERS
+) -> str:
+    """Create and register only, leaving the start (and its options) to the test."""
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
-    for player_id in PLAYERS:
+    for player_id in players:
         engine.register_player(tournament_id, player_id)
+    return tournament_id
+
+
+def start_four_player_tournament(engine: TournamentEngine, seed: int = 42) -> str:
+    tournament_id = create_tournament_with_players(engine)
     engine.start_tournament(tournament_id, seed=seed)
     return tournament_id
 

@@ -342,7 +342,7 @@ class TournamentEngine:
             raise EngineError(f"{player_id} is not registered in {tournament_id}")
         if player_id in tournament.dropped:
             raise EngineError(f"{player_id} has already dropped from {tournament_id}")
-        if len(tournament.players) - len(tournament.dropped) - 1 < 2:
+        if len(self._active_players(tournament)) - 1 < 2:
             raise EngineError(
                 f"dropping {player_id} would leave {tournament_id} with fewer "
                 f"than 2 players; end the Tournament early instead"
@@ -352,11 +352,10 @@ class TournamentEngine:
     def end_tournament(self, tournament_id: str) -> None:
         """The TO ends the Tournament early; Standings-so-far become final.
 
-        Legal only between Rounds: the current Round must be untouched (no
-        result activity beyond its pre-confirmed Bye). A Round in progress is
-        force-closed first — Assigned Results for its unfinished Matches — and
-        the next Round pairs automatically; ending then voids that fresh Round
-        as never played.
+        Legal only between Rounds — rejected while the current Round has any
+        result activity beyond its pre-confirmed Bye; the TO force-closes such
+        a Round (Assigned Results for its unfinished Matches) before ending.
+        The untouched current Round is voided as never played.
         """
         tournament = self._tournament_state(tournament_id)
         if tournament.phase != "in_progress":
@@ -549,11 +548,8 @@ class TournamentEngine:
         # Score Groups from most points down, random order within each group;
         # pair_round pairs within groups where possible, minimizes pair-downs,
         # never repeats an opponent, and grants the Bye on odd counts.
-        # Dropped players are simply out of the pool (never paired again).
         by_points: dict[int, list[str]] = {}
-        for player in state.players:
-            if player in state.dropped:
-                continue
+        for player in self._active_players(state):
             by_points.setdefault(state.match_points[player], []).append(player)
         groups: list[list[str]] = []
         for points in sorted(by_points, reverse=True):
@@ -599,6 +595,11 @@ class TournamentEngine:
                 state.opponents[match.player_a].add(match.player_b)
                 state.opponents[match.player_b].add(match.player_a)
         self._recompute_match_points(state)
+
+    @staticmethod
+    def _active_players(state: _TournamentState) -> list[str]:
+        """The pairing pool: registered players who have not dropped."""
+        return [p for p in state.players if p not in state.dropped]
 
     @staticmethod
     def _tiebreakers(state: _TournamentState) -> dict[str, Tiebreakers]:
