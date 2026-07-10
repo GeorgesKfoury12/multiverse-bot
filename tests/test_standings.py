@@ -27,13 +27,18 @@ def submit(
     games_won: int,
     games_lost: int,
 ) -> None:
-    engine.submit_result(
+    """The winner reports, the loser confirms — the shortest confirmed path."""
+    engine.report_result(
         tournament_id,
         match.match_id,
+        reported_by=winner,
         winner=winner,
         games_won=games_won,
         games_lost=games_lost,
     )
+    loser = match.player_b if winner == match.player_a else match.player_a
+    assert loser is not None
+    engine.confirm_result(tournament_id, match.match_id, confirmed_by=loser)
 
 
 def match_of(

@@ -13,7 +13,10 @@ from fractions import Fraction
 from multiverse_bot.engine.actions import (
     Action,
     PlayerRegistered,
-    ResultSubmitted,
+    ResultAssigned,
+    ResultConfirmed,
+    ResultDisputed,
+    ResultReported,
     TournamentCreated,
     TournamentEnded,
     TournamentStarted,
@@ -45,20 +48,30 @@ class Tournament:
 
 @dataclass(frozen=True)
 class Match:
-    """One Match of a Round's Pairings; result fields are None until submitted.
+    """One Match of a Round's Pairings, with its Reported Result if any.
+
+    ``status`` walks the result flow: ``awaiting_report`` (no result yet) ->
+    ``pending`` (reported, awaiting the opponent) -> ``confirmed``, with
+    ``disputed`` flagging the Match for TO resolution. The result fields show
+    the reported or confirmed result; ``winner is None`` on a confirmed
+    result is a drawn Match (e.g. 1-1-1). ``reported_by`` is the reporting
+    player, or None for Assigned Results and Byes.
 
     A Bye is a Match with no opponent (``player_b is None``): it comes
-    pre-scored as a win for ``player_a`` at the ruleset's Bye game score and
-    stays marked so Tiebreaker exclusion can find it later.
+    pre-confirmed as a win for ``player_a`` at the ruleset's Bye game score
+    and stays marked so Tiebreaker exclusion can find it later.
     """
 
     match_id: str
     round_number: int
     player_a: str
     player_b: str | None
+    status: str = "awaiting_report"
     winner: str | None = None
     games_won: int | None = None
     games_lost: int | None = None
+    games_drawn: int | None = None
+    reported_by: str | None = None
 
     @property
     def is_bye(self) -> bool:
@@ -82,6 +95,25 @@ class Standing:
     ogw: Fraction
 
 
+@dataclass(frozen=True)
+class _Result:
+    """A result's content: winner (None for a drawn Match) and game score."""
+
+    winner: str | None
+    games_won: int
+    games_lost: int
+    games_drawn: int
+
+
+@dataclass
+class _MatchResult:
+    """One Match's place in the result flow: pending | disputed | confirmed."""
+
+    status: str
+    result: _Result
+    reported_by: str | None
+
+
 @dataclass
 class _TournamentState:
     tournament_id: str
@@ -94,7 +126,7 @@ class _TournamentState:
     current_round: int | None = None
     rounds: dict[int, list[Match]] = field(default_factory=dict)
     matches_by_id: dict[str, Match] = field(default_factory=dict)
-    results_by_match: dict[str, tuple[str, int, int]] = field(default_factory=dict)
+    results_by_match: dict[str, _MatchResult] = field(default_factory=dict)
     match_points: dict[str, int] = field(default_factory=dict)
     opponents: dict[str, set[str]] = field(default_factory=dict)
     byes: set[str] = field(default_factory=set)
@@ -144,34 +176,97 @@ class TournamentEngine:
             raise EngineError(f"{tournament_id} needs at least 2 players to start")
         self._record(TournamentStarted(tournament_id, seed))
 
-    def submit_result(
+    def report_result(
         self,
         tournament_id: str,
         match_id: str,
-        winner: str,
+        reported_by: str,
+        winner: str | None,
         games_won: int,
         games_lost: int,
+        games_drawn: int = 0,
     ) -> None:
-        tournament = self._tournament_state(tournament_id)
-        if tournament.phase != "in_progress":
-            raise EngineError(f"{tournament_id} is not in progress")
-        match = tournament.matches_by_id.get(match_id)
-        if match is None:
-            raise EngineError(f"no such match in {tournament_id}: {match_id}")
-        if match.round_number != tournament.current_round:
-            raise EngineError(
-                f"round {match.round_number} is closed; {match_id} is frozen"
-            )
-        if winner not in (match.player_a, match.player_b):
-            raise EngineError(f"{winner} is not playing in {match_id}")
-        if match_id in tournament.results_by_match:
-            raise EngineError(f"{match_id} already has a result")
-        if games_lost < 0 or games_won <= games_lost:
-            raise EngineError(
-                f"{games_won}-{games_lost} is not a winning score for {winner}"
-            )
+        tournament, match = self._open_match(tournament_id, match_id)
+        if reported_by not in (match.player_a, match.player_b):
+            raise EngineError(f"{reported_by} is not playing in {match_id}")
+        existing = tournament.results_by_match.get(match_id)
+        if existing is not None and existing.status == "confirmed":
+            raise EngineError(f"{match_id} already has a confirmed result")
+        self._validate_score(match, winner, games_won, games_lost, games_drawn)
         self._record(
-            ResultSubmitted(tournament_id, match_id, winner, games_won, games_lost)
+            ResultReported(
+                tournament_id,
+                match_id,
+                reported_by,
+                winner,
+                games_won,
+                games_lost,
+                games_drawn,
+            )
+        )
+
+    def confirm_result(
+        self, tournament_id: str, match_id: str, confirmed_by: str
+    ) -> None:
+        _, match = self._open_match(tournament_id, match_id)
+        entry = self._unconfirmed_entry(tournament_id, match_id)
+        if confirmed_by != self._opponent_of(match, entry.reported_by):
+            raise EngineError(
+                f"only {entry.reported_by}'s opponent can confirm {match_id}"
+            )
+        self._record(ResultConfirmed(tournament_id, match_id, confirmed_by))
+
+    def dispute_result(
+        self, tournament_id: str, match_id: str, disputed_by: str
+    ) -> None:
+        _, match = self._open_match(tournament_id, match_id)
+        entry = self._unconfirmed_entry(tournament_id, match_id)
+        if entry.status == "disputed":
+            raise EngineError(f"{match_id} is already disputed")
+        if disputed_by != self._opponent_of(match, entry.reported_by):
+            raise EngineError(
+                f"only {entry.reported_by}'s opponent can dispute {match_id}"
+            )
+        self._record(ResultDisputed(tournament_id, match_id, disputed_by))
+
+    def to_confirm_result(self, tournament_id: str, match_id: str, actor: str) -> None:
+        """The TO confirms a Pending or Disputed result as reported.
+
+        The engine records ``actor`` but cannot know Discord roles; the caller
+        is responsible for only routing TOs here.
+        """
+        self._open_match(tournament_id, match_id)
+        self._unconfirmed_entry(tournament_id, match_id)
+        self._record(ResultConfirmed(tournament_id, match_id, actor))
+
+    def assign_result(
+        self,
+        tournament_id: str,
+        match_id: str,
+        assigned_by: str,
+        winner: str | None,
+        games_won: int,
+        games_lost: int,
+        games_drawn: int = 0,
+    ) -> None:
+        """The TO sets or replaces the Match's result — unreported, Pending,
+        Disputed, or already confirmed — any time before the Round closes.
+
+        The engine records ``assigned_by`` but cannot know Discord roles; the
+        caller is responsible for only routing TOs here.
+        """
+        _, match = self._open_match(tournament_id, match_id)
+        self._validate_score(match, winner, games_won, games_lost, games_drawn)
+        self._record(
+            ResultAssigned(
+                tournament_id,
+                match_id,
+                assigned_by,
+                winner,
+                games_won,
+                games_lost,
+                games_drawn,
+            )
         )
 
     def end_tournament(self, tournament_id: str) -> None:
@@ -263,20 +358,44 @@ class TournamentEngine:
                 state.match_points = {player: 0 for player in state.players}
                 state.opponents = {player: set() for player in state.players}
                 self._begin_round(state, 1)
-            case ResultSubmitted(
+            case ResultReported(
+                tournament_id=tournament_id,
+                match_id=match_id,
+                reported_by=reported_by,
+                winner=winner,
+                games_won=games_won,
+                games_lost=games_lost,
+                games_drawn=games_drawn,
+            ):
+                state = self._tournaments[tournament_id]
+                state.results_by_match[match_id] = _MatchResult(
+                    status="pending",
+                    result=_Result(winner, games_won, games_lost, games_drawn),
+                    reported_by=reported_by,
+                )
+            case ResultConfirmed(tournament_id=tournament_id, match_id=match_id):
+                state = self._tournaments[tournament_id]
+                state.results_by_match[match_id].status = "confirmed"
+                self._recompute_match_points(state)
+                self._advance_if_round_complete(state)
+            case ResultDisputed(tournament_id=tournament_id, match_id=match_id):
+                state = self._tournaments[tournament_id]
+                state.results_by_match[match_id].status = "disputed"
+            case ResultAssigned(
                 tournament_id=tournament_id,
                 match_id=match_id,
                 winner=winner,
                 games_won=games_won,
                 games_lost=games_lost,
+                games_drawn=games_drawn,
             ):
                 state = self._tournaments[tournament_id]
-                state.results_by_match[match_id] = (winner, games_won, games_lost)
-                match = state.matches_by_id[match_id]
-                loser = match.player_b if winner == match.player_a else match.player_a
-                assert loser is not None
-                state.match_points[winner] += state.ruleset.match_points_win
-                state.match_points[loser] += state.ruleset.match_points_loss
+                state.results_by_match[match_id] = _MatchResult(
+                    status="confirmed",
+                    result=_Result(winner, games_won, games_lost, games_drawn),
+                    reported_by=None,
+                )
+                self._recompute_match_points(state)
                 self._advance_if_round_complete(state)
             case TournamentEnded(tournament_id=tournament_id):
                 self._tournaments[tournament_id].phase = "completed"
@@ -284,7 +403,9 @@ class TournamentEngine:
     def _advance_if_round_complete(self, state: _TournamentState) -> None:
         assert state.current_round is not None and state.round_count is not None
         current_matches = state.rounds[state.current_round]
-        if any(m.match_id not in state.results_by_match for m in current_matches):
+        # Only confirmed results close a Round: a Pending or Disputed result
+        # holds it open (ADR-0001: no auto-confirm timers).
+        if any(not self._is_confirmed(state, m.match_id) for m in current_matches):
             return
         if state.current_round == state.round_count:
             state.phase = "completed"
@@ -333,41 +454,54 @@ class TournamentEngine:
         for match in matches:
             state.matches_by_id[match.match_id] = match
             if match.is_bye:
-                # A Bye scores as a win immediately; it never blocks the Round.
-                state.results_by_match[match.match_id] = (
-                    match.player_a,
-                    *state.ruleset.bye_game_score,
+                # A Bye comes pre-confirmed as a win; it never blocks the Round.
+                state.results_by_match[match.match_id] = _MatchResult(
+                    status="confirmed",
+                    result=_Result(match.player_a, *state.ruleset.bye_game_score, 0),
+                    reported_by=None,
                 )
-                state.match_points[match.player_a] += state.ruleset.match_points_win
                 state.byes.add(match.player_a)
             else:
                 state.opponents[match.player_a].add(match.player_b)
                 state.opponents[match.player_b].add(match.player_a)
+        self._recompute_match_points(state)
 
     @staticmethod
     def _tiebreakers(state: _TournamentState) -> dict[str, Tiebreakers]:
-        # Only completed two-player Matches feed the Tiebreakers: Byes are
-        # excluded per ADR-0002, unreported Matches have nothing to count.
+        # Only confirmed two-player Matches feed the Tiebreakers: Byes are
+        # excluded per ADR-0002, Pending results are not results yet. Drawn
+        # games count as played but not won in GW% (house policy, like the
+        # drawn-Match point split in the ruleset).
         ruleset = state.ruleset
         records: dict[str, list[MatchRecord]] = {player: [] for player in state.players}
-        for match_id, (winner, games_won, games_lost) in state.results_by_match.items():
+        for match_id, entry in state.results_by_match.items():
+            if entry.status != "confirmed":
+                continue
             match = state.matches_by_id[match_id]
             if match.is_bye:
                 continue
             assert match.player_b is not None
-            games_played = games_won + games_lost
+            result = entry.result
+            games_played = result.games_won + result.games_lost + result.games_drawn
             for player, opponent in (
                 (match.player_a, match.player_b),
                 (match.player_b, match.player_a),
             ):
-                won = player == winner
+                if result.winner is None:
+                    # A drawn Match's game score is symmetric (e.g. 1-1-1).
+                    match_points = ruleset.match_points_draw
+                    games_won = result.games_won
+                else:
+                    won = player == result.winner
+                    match_points = (
+                        ruleset.match_points_win if won else ruleset.match_points_loss
+                    )
+                    games_won = result.games_won if won else result.games_lost
                 records[player].append(
                     MatchRecord(
                         opponent=opponent,
-                        match_points=ruleset.match_points_win
-                        if won
-                        else ruleset.match_points_loss,
-                        games_won=games_won if won else games_lost,
+                        match_points=match_points,
+                        games_won=games_won,
                         games_played=games_played,
                     )
                 )
@@ -377,13 +511,109 @@ class TournamentEngine:
             floor=ruleset.tiebreaker_floor,
         )
 
+    def _recompute_match_points(self, state: _TournamentState) -> None:
+        # Derived from confirmed results alone, so a TO correction that
+        # replaces a confirmed result never leaves stale points behind.
+        ruleset = state.ruleset
+        points = {player: 0 for player in state.players}
+        for match_id, entry in state.results_by_match.items():
+            if entry.status != "confirmed":
+                continue
+            match = state.matches_by_id[match_id]
+            result = entry.result
+            if match.is_bye:
+                points[match.player_a] += ruleset.match_points_win
+            elif result.winner is None:
+                points[match.player_a] += ruleset.match_points_draw
+                points[match.player_b] += ruleset.match_points_draw
+            else:
+                loser = (
+                    match.player_b
+                    if result.winner == match.player_a
+                    else match.player_a
+                )
+                assert loser is not None
+                points[result.winner] += ruleset.match_points_win
+                points[loser] += ruleset.match_points_loss
+        state.match_points = points
+
+    @staticmethod
+    def _is_confirmed(state: _TournamentState, match_id: str) -> bool:
+        entry = state.results_by_match.get(match_id)
+        return entry is not None and entry.status == "confirmed"
+
+    def _unconfirmed_entry(self, tournament_id: str, match_id: str) -> _MatchResult:
+        """The Match's Pending or Disputed result; there must be one."""
+        state = self._tournament_state(tournament_id)
+        entry = state.results_by_match.get(match_id)
+        if entry is None:
+            raise EngineError(f"{match_id} has no reported result")
+        if entry.status == "confirmed":
+            raise EngineError(f"{match_id} already has a confirmed result")
+        return entry
+
+    @staticmethod
+    def _opponent_of(match: Match, player: str | None) -> str | None:
+        return match.player_b if player == match.player_a else match.player_a
+
+    def _open_match(
+        self, tournament_id: str, match_id: str
+    ) -> tuple[_TournamentState, Match]:
+        """The Match if its Round is still open; results freeze at Round close."""
+        tournament = self._tournament_state(tournament_id)
+        if tournament.phase != "in_progress":
+            raise EngineError(f"{tournament_id} is not in progress")
+        match = tournament.matches_by_id.get(match_id)
+        if match is None:
+            raise EngineError(f"no such match in {tournament_id}: {match_id}")
+        if match.round_number != tournament.current_round:
+            raise EngineError(
+                f"round {match.round_number} is closed; {match_id} is frozen"
+            )
+        return tournament, match
+
+    @staticmethod
+    def _validate_score(
+        match: Match,
+        winner: str | None,
+        games_won: int,
+        games_lost: int,
+        games_drawn: int,
+    ) -> None:
+        if match.is_bye:
+            raise EngineError(f"{match.match_id} is a Bye; it comes pre-scored")
+        if min(games_won, games_lost, games_drawn) < 0:
+            raise EngineError("game counts cannot be negative")
+        if games_won + games_lost + games_drawn == 0:
+            raise EngineError("a result needs at least one game")
+        if winner is None:
+            if games_won != games_lost:
+                raise EngineError(
+                    f"{games_won}-{games_lost}-{games_drawn} is not a drawn score"
+                )
+        else:
+            if winner not in (match.player_a, match.player_b):
+                raise EngineError(f"{winner} is not playing in {match.match_id}")
+            if games_won <= games_lost:
+                raise EngineError(
+                    f"{games_won}-{games_lost} is not a winning score for {winner}"
+                )
+
     @staticmethod
     def _with_result(state: _TournamentState, match: Match) -> Match:
-        result = state.results_by_match.get(match.match_id)
-        if result is None:
+        entry = state.results_by_match.get(match.match_id)
+        if entry is None:
             return match
-        winner, games_won, games_lost = result
-        return replace(match, winner=winner, games_won=games_won, games_lost=games_lost)
+        result = entry.result
+        return replace(
+            match,
+            status=entry.status,
+            winner=result.winner,
+            games_won=result.games_won,
+            games_lost=result.games_lost,
+            games_drawn=result.games_drawn,
+            reported_by=entry.reported_by,
+        )
 
     def _tournament_state(self, tournament_id: str) -> _TournamentState:
         try:

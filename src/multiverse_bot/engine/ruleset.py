@@ -8,9 +8,9 @@ Riftbound uses them unmodified. Adding another TCG means registering another
 ``Ruleset``, not touching the engine.
 
 Still to come from later tickets: the TO round-count override at start
-(ADR-0002 / spec #1 story 15), and how a drawn game counts once results can
-express draws (``match_points_draw`` is already policy; GW% draw counting
-is not).
+(ADR-0002 / spec #1 story 15). A drawn Match splits ``match_points_draw``
+to each player; a drawn game counts as played but not won in GW% (house
+policy, applied where results feed the Tiebreakers).
 
 Histories record only the Game's name (in ``TournamentCreated``), so replay
 resolves the ruleset through ``RULESETS``.
