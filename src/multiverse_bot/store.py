@@ -1,15 +1,19 @@
-"""SQLite persistence for the tournament engine: an append-only action log.
+"""SQLite persistence: the engine's action log, plus the Discord wiring.
 
 The engine stays pure (spec #1) — durability lives here, behind one call:
 ``open_engine`` replays the stored history through a fresh engine (identical
 state by construction) and hooks the log in as the engine's action sink, so
 every action is committed the moment it is recorded. There is no batch or
 flush window: a crash after any confirmed command loses nothing.
+
+The Discord adapter's wiring — per-Tournament channel bindings and per-Match
+threads — is not engine state, so it lives in its own tables
+(``BindingsStore``) in the same file, and survives restarts the same way.
 """
 
 import json
 import sqlite3
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import get_args
 
@@ -56,6 +60,76 @@ class SqliteActionStore:
             _ACTION_TYPES[type_name](**json.loads(payload))
             for type_name, payload in rows
         )
+
+
+@dataclass(frozen=True)
+class ChannelBindings:
+    """Where one Tournament's artifacts post: the community's existing purpose
+    channels, chosen by the TO at creation (spec #1 story 29)."""
+
+    pairings_channel_id: int
+    scores_channel_id: int
+    decklists_channel_id: int
+    standings_channel_id: int
+
+
+class BindingsStore:
+    """The Discord adapter's durable wiring, next to the action log."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._connection = sqlite3.connect(path)
+        self._connection.execute(
+            "CREATE TABLE IF NOT EXISTS channel_bindings ("
+            "  tournament_id TEXT PRIMARY KEY,"
+            "  pairings_channel_id INTEGER NOT NULL,"
+            "  scores_channel_id INTEGER NOT NULL,"
+            "  decklists_channel_id INTEGER NOT NULL,"
+            "  standings_channel_id INTEGER NOT NULL"
+            ")"
+        )
+        self._connection.execute(
+            "CREATE TABLE IF NOT EXISTS match_threads ("
+            "  match_id TEXT PRIMARY KEY,"
+            "  thread_id INTEGER NOT NULL"
+            ")"
+        )
+        self._connection.commit()
+
+    def save_bindings(self, tournament_id: str, bindings: ChannelBindings) -> None:
+        self._connection.execute(
+            "INSERT OR REPLACE INTO channel_bindings VALUES (?, ?, ?, ?, ?)",
+            (
+                tournament_id,
+                bindings.pairings_channel_id,
+                bindings.scores_channel_id,
+                bindings.decklists_channel_id,
+                bindings.standings_channel_id,
+            ),
+        )
+        self._connection.commit()
+
+    def bindings(self, tournament_id: str) -> ChannelBindings | None:
+        row = self._connection.execute(
+            "SELECT pairings_channel_id, scores_channel_id, decklists_channel_id,"
+            "  standings_channel_id"
+            "  FROM channel_bindings WHERE tournament_id = ?",
+            (tournament_id,),
+        ).fetchone()
+        return ChannelBindings(*row) if row else None
+
+    def save_match_thread(self, match_id: str, thread_id: int) -> None:
+        self._connection.execute(
+            "INSERT OR REPLACE INTO match_threads VALUES (?, ?)",
+            (match_id, thread_id),
+        )
+        self._connection.commit()
+
+    def match_thread(self, match_id: str) -> int | None:
+        row = self._connection.execute(
+            "SELECT thread_id FROM match_threads WHERE match_id = ?",
+            (match_id,),
+        ).fetchone()
+        return row[0] if row else None
 
 
 def open_engine(path: str | Path) -> TournamentEngine:
