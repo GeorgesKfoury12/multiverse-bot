@@ -1,9 +1,11 @@
-"""Discord adapter: slash commands in, engine calls out (ticket #9).
+"""Discord adapter: slash commands and buttons in, engine calls out
+(tickets #9, #10).
 
 Thin by design (spec #1): every command translates one-to-one into an engine
 command or query, TO authorization is one configured Discord role, and the
 adapter's only own state is the persisted channel wiring. Restarting the bot
-is therefore just ``open_engine`` plus reading that wiring back.
+is therefore just ``open_engine`` plus reading that wiring back — the
+confirm/Dispute buttons are stateless too, resolved from their custom_id.
 
 Engine player IDs are Discord user IDs as strings, so ``<@id>`` mentions are
 the display form everywhere.
@@ -11,13 +13,22 @@ the display form everywhere.
 
 import os
 import random
+import re
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from multiverse_bot.engine import EngineError, Tournament, TournamentEngine
+from fractions import Fraction
+
+from multiverse_bot.engine import (
+    EngineError,
+    Match,
+    Standing,
+    Tournament,
+    TournamentEngine,
+)
 from multiverse_bot.store import BindingsStore, ChannelBindings, open_engine
 
 
@@ -35,6 +46,7 @@ _SIGNUP_OPEN = ("registration",)
 _ACCEPTING_DECKS = ("registration", "registration_closed")
 _STARTABLE = ("registration", "registration_closed")
 _IN_PROGRESS = ("in_progress",)
+_RESULTED = ("in_progress", "completed")
 
 
 def resolve_tournament(
@@ -68,6 +80,99 @@ def resolve_tournament(
     return candidates[0]
 
 
+def parse_score(score: str) -> tuple[int, int, int]:
+    """Read a reported game score — "2-1", or "1-1-1" with drawn games —
+    as (games_won, games_lost, games_drawn), winner's count first."""
+    try:
+        numbers = [int(part) for part in score.split("-")]
+    except ValueError:
+        numbers = []
+    if len(numbers) == 2:
+        return numbers[0], numbers[1], 0
+    if len(numbers) == 3:
+        return numbers[0], numbers[1], numbers[2]
+    raise CommandError(
+        f"could not read {score!r} as a game score — use e.g. 2-0, 2-1, "
+        "or 1-1-1 for a draw"
+    )
+
+
+def format_score(games_won: int, games_lost: int, games_drawn: int) -> str:
+    if games_drawn:
+        return f"{games_won}-{games_lost}-{games_drawn}"
+    return f"{games_won}-{games_lost}"
+
+
+def open_match_by_id(
+    engine: TournamentEngine, match_id: str
+) -> tuple[Tournament, Match]:
+    """The Match a report or confirm/Dispute click is about, if its Round is
+    still open. Only current-round Matches of in-progress Tournaments are in
+    play: anything else is frozen (or never existed) and the engine would
+    refuse it anyway — this just says so upfront."""
+    for tournament in engine.tournaments():
+        if tournament.phase != "in_progress":
+            continue
+        assert tournament.current_round is not None
+        for match in engine.pairings(
+            tournament.tournament_id, tournament.current_round
+        ):
+            if match.match_id == match_id:
+                return tournament, match
+    raise CommandError(f"{match_id} is not in an open Round; its result is frozen")
+
+
+def open_match_for_thread(
+    engine: TournamentEngine, bindings_store: BindingsStore, thread_id: int | None
+) -> tuple[Tournament, Match]:
+    """The open Match hosted by the thread a command was used in."""
+    match_id = (
+        bindings_store.match_for_thread(thread_id) if thread_id is not None else None
+    )
+    if match_id is None:
+        raise CommandError("this command only works inside a Match thread")
+    return open_match_by_id(engine, match_id)
+
+
+def _percent(value: Fraction) -> str:
+    return f"{float(value):.1%}"
+
+
+def standings_lines(
+    tournament: Tournament, standings: tuple[Standing, ...]
+) -> list[str]:
+    """The Standings post, one ranked row per player with the full Tiebreaker
+    stack visible so placements explain themselves (spec #1 story 27). Final
+    Standings crown the winner — rank-1 players still tied through the whole
+    stack share the title (story 28)."""
+    if tournament.phase == "completed":
+        title = f"## {tournament.name} — Final Standings"
+    else:
+        title = (
+            f"## {tournament.name} — Standings entering Round "
+            f"{tournament.current_round}/{tournament.round_count}"
+        )
+    lines = [title]
+    for row in standings:
+        dropped = " (dropped)" if row.player_id in tournament.dropped else ""
+        lines.append(
+            f"{row.rank}. <@{row.player_id}>{dropped} — **{row.match_points} pts** "
+            f"(OMW {_percent(row.omw)} · GW {_percent(row.gw)} "
+            f"· OGW {_percent(row.ogw)})"
+        )
+    if tournament.phase == "completed":
+        champions = [row.player_id for row in standings if row.rank == 1]
+        mentions = " and ".join(f"<@{player}>" for player in champions)
+        if len(champions) == 1:
+            lines.append(f"🏆 {mentions} wins **{tournament.name}**!")
+        else:
+            lines.append(
+                f"🏆 {mentions} share the title of **{tournament.name}** — "
+                "tied through every Tiebreaker!"
+            )
+    return lines
+
+
 class MultiverseBot(commands.Bot):
     def __init__(
         self,
@@ -85,6 +190,9 @@ class MultiverseBot(commands.Bot):
         _install_commands(self)
 
     async def setup_hook(self) -> None:
+        # Confirm/Dispute buttons are matched by custom_id, so the ones on
+        # messages posted before a restart keep working.
+        self.add_dynamic_items(ConfirmResultButton, DisputeResultButton)
         if self.guild_id is not None:
             # Guild-scoped sync is instant; global sync can take an hour.
             guild = discord.Object(self.guild_id)
@@ -97,13 +205,30 @@ class MultiverseBot(commands.Bot):
         print(f"Logged in as {self.user} (id: {self.user.id})", flush=True)
 
 
+async def bound_channel(
+    bot: MultiverseBot, tournament_id: str, purpose: str
+) -> discord.TextChannel:
+    """The Tournament's bound channel for one artifact ("pairings", "scores",
+    "decklists" or "standings")."""
+    bindings = bot.bindings_store.bindings(tournament_id)
+    if bindings is None:
+        raise CommandError(f"{tournament_id} has no channel bindings on file")
+    channel_id: int = getattr(bindings, f"{purpose}_channel_id")
+    channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        raise CommandError(
+            f"the {purpose} binding for {tournament_id} is not a text channel"
+        )
+    return channel
+
+
 async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
     """Post the current Round's Pairings in the bound pairings channel and
     open one thread per Match with both players pinged inside; a Bye is
     announced in the post itself (spec #1 stories 9, 10, 13).
 
     Shared seam for every Round: ``/tournament start`` posts Round 1 here, and
-    the result flow (ticket #10) will call it as confirmations close Rounds.
+    ``advance_announcements`` calls it as confirmations close Rounds.
     Safe to re-run (``/tournament post-pairings``): Matches whose thread is
     already on file keep it, so a crash mid-announcement is recoverable
     without duplicate threads.
@@ -112,16 +237,7 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
     tournament = engine.tournament(tournament_id)
     round_number = tournament.current_round
     assert round_number is not None
-    bindings = bot.bindings_store.bindings(tournament_id)
-    if bindings is None:
-        raise CommandError(f"{tournament_id} has no channel bindings on file")
-    channel = bot.get_channel(bindings.pairings_channel_id) or await bot.fetch_channel(
-        bindings.pairings_channel_id
-    )
-    if not isinstance(channel, discord.TextChannel):
-        raise CommandError(
-            f"the pairings binding for {tournament_id} is not a text channel"
-        )
+    channel = await bound_channel(bot, tournament_id, "pairings")
     matches = engine.pairings(tournament_id, round_number)
 
     async def display_name(player_id: str) -> str:
@@ -173,6 +289,186 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
             "schedule and play your Match here, then report the result."
         )
         bot.bindings_store.save_match_thread(match.match_id, thread.id)
+
+
+async def announce_result(
+    bot: MultiverseBot, tournament: Tournament, match: Match
+) -> None:
+    """Announce one confirmed result in the bound scores channel, keeping the
+    community's at-a-glance record in sync (spec #1 story 18)."""
+    channel = await bound_channel(bot, tournament.tournament_id, "scores")
+    assert match.games_won is not None
+    assert match.games_lost is not None and match.games_drawn is not None
+    score = format_score(match.games_won, match.games_lost, match.games_drawn)
+    if match.winner is None:
+        headline = f"<@{match.player_a}> and <@{match.player_b}> drew {score}"
+    else:
+        loser = match.player_b if match.winner == match.player_a else match.player_a
+        headline = f"<@{match.winner}> beat <@{loser}> {score}"
+    await channel.send(
+        f"⚔️ **{tournament.name}** Round {match.round_number}: {headline}",
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+async def announce_standings(bot: MultiverseBot, tournament_id: str) -> None:
+    """Post the current Standings in the bound standings channel; final
+    Standings also crown (and ping) the Tournament winner."""
+    tournament = bot.engine.tournament(tournament_id)
+    standings = bot.engine.standings(tournament_id)
+    channel = await bound_channel(bot, tournament_id, "standings")
+    # Standings rows never ping; the winner announcement is the exception.
+    champions = (
+        [discord.Object(int(row.player_id)) for row in standings if row.rank == 1]
+        if tournament.phase == "completed"
+        else []
+    )
+    await channel.send(
+        "\n".join(standings_lines(tournament, standings)),
+        allowed_mentions=discord.AllowedMentions(
+            everyone=False, roles=False, users=champions
+        ),
+    )
+
+
+async def advance_announcements(
+    bot: MultiverseBot, tournament_id: str, round_before: int | None
+) -> None:
+    """After a confirmation lands: if it closed the Round, post Standings and
+    then the next Round's Pairings, with no TO action needed (spec #1 stories
+    21, 27); if it completed the Tournament, post final Standings and the
+    winner (story 28).
+
+    Shared seam for everything that confirms results: the confirm button now,
+    the TO's corrections (ticket #12) later.
+    """
+    tournament = bot.engine.tournament(tournament_id)
+    if tournament.phase == "completed":
+        await announce_standings(bot, tournament_id)
+    elif tournament.current_round != round_before:
+        await announce_standings(bot, tournament_id)
+        await announce_pairings(bot, tournament_id)
+
+
+class ConfirmResultButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"multiverse:confirm:(?P<match_id>[A-Za-z0-9-]+)",
+):
+    """The opponent's one-click confirm, pinned to its Match by custom_id so
+    it keeps working across bot restarts (spec #1 story 17)."""
+
+    def __init__(self, match_id: str) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Confirm",
+                style=discord.ButtonStyle.success,
+                custom_id=f"multiverse:confirm:{match_id}",
+            )
+        )
+        self.match_id = match_id
+
+    @classmethod
+    async def from_custom_id(
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: "re.Match[str]",
+    ) -> "ConfirmResultButton":
+        return cls(match["match_id"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        assert isinstance(bot, MultiverseBot)
+        try:
+            tournament, _ = open_match_by_id(bot.engine, self.match_id)
+            round_before = tournament.current_round
+            bot.engine.confirm_result(
+                tournament.tournament_id,
+                self.match_id,
+                confirmed_by=str(interaction.user.id),
+            )
+        except (EngineError, CommandError) as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        # Acknowledge in the thread first — the channel posts below each cost
+        # a Discord round-trip and the interaction token is on a clock.
+        assert interaction.message is not None
+        await interaction.response.edit_message(
+            content=(
+                f"{interaction.message.content}\n"
+                f"✅ Confirmed by {interaction.user.mention}."
+            ),
+            view=None,
+        )
+        assert round_before is not None
+        confirmed = next(
+            m
+            for m in bot.engine.pairings(tournament.tournament_id, round_before)
+            if m.match_id == self.match_id
+        )
+        await announce_result(bot, tournament, confirmed)
+        await advance_announcements(bot, tournament.tournament_id, round_before)
+
+
+class DisputeResultButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"multiverse:dispute:(?P<match_id>[A-Za-z0-9-]+)",
+):
+    """The opponent's one-click Dispute: flags the Match and pings the TO with
+    the Match thread as context (spec #1 story 19)."""
+
+    def __init__(self, match_id: str) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Dispute",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"multiverse:dispute:{match_id}",
+            )
+        )
+        self.match_id = match_id
+
+    @classmethod
+    async def from_custom_id(
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: "re.Match[str]",
+    ) -> "DisputeResultButton":
+        return cls(match["match_id"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        assert isinstance(bot, MultiverseBot)
+        try:
+            tournament, _ = open_match_by_id(bot.engine, self.match_id)
+            bot.engine.dispute_result(
+                tournament.tournament_id,
+                self.match_id,
+                disputed_by=str(interaction.user.id),
+            )
+        except (EngineError, CommandError) as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        assert interaction.message is not None
+        await interaction.response.edit_message(
+            content=(
+                f"{interaction.message.content}\n"
+                f"⚠️ Disputed by {interaction.user.mention}."
+            ),
+            view=None,
+        )
+        channel = interaction.channel
+        assert isinstance(channel, discord.Thread)
+        await channel.send(
+            f"<@&{bot.to_role_id}> — {interaction.user.mention} disputed the "
+            f"reported result in {channel.mention}. Sort it out here, then "
+            "either player can `/report` again — or the TO rules on it.",
+            allowed_mentions=discord.AllowedMentions(
+                everyone=False,
+                roles=[discord.Object(bot.to_role_id)],
+                users=False,
+            ),
+        )
 
 
 def _install_commands(bot: MultiverseBot) -> None:
@@ -306,6 +602,28 @@ def _install_commands(bot: MultiverseBot) -> None:
             f"Pairings for **{target.name}** are re-posted."
         )
 
+    @tournament_group.command(
+        name="post-standings",
+        description="Re-post the current Standings (recovery)",
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(tournament="Tournament ID or name; defaults if unique")
+    async def post_standings(
+        interaction: discord.Interaction, tournament: str | None = None
+    ) -> None:
+        """Recovery for a crash between a Round closing and its Standings
+        landing: posts the current Standings again (final ones for a completed
+        Tournament); pair with post-pairings if the next Round's posts are
+        missing too."""
+        target = resolve_tournament(
+            engine, tournament, _RESULTED, "in progress or completed"
+        )
+        await interaction.response.defer()
+        await announce_standings(bot, target.tournament_id)
+        await interaction.followup.send(
+            f"Standings for **{target.name}** are re-posted."
+        )
+
     @bot.tree.command(description="Sign up for a Tournament")
     @app_commands.guild_only()
     @app_commands.describe(tournament="Tournament ID or name; defaults if unique")
@@ -344,6 +662,54 @@ def _install_commands(bot: MultiverseBot) -> None:
             f"Deck locked in for **{target.name}**, Sealed until the start. "
             f"On file:\n>>> {deck}",
             ephemeral=True,
+        )
+
+    @bot.tree.command(description="Report your Match result from its Match thread")
+    @app_commands.guild_only()
+    @app_commands.describe(
+        score="Game score, winner's count first: 2-0, 2-1, or 1-1-1 for a draw",
+        winner="Who won the Match; leave empty for a draw",
+    )
+    async def report(
+        interaction: discord.Interaction,
+        score: str,
+        winner: discord.Member | None = None,
+    ) -> None:
+        """Either player reports winner + game score; the opponent gets
+        one-click confirm / Dispute (spec #1 stories 16, 17). Re-reporting
+        replaces a Pending or Disputed result with a fresh Pending one."""
+        target, match = open_match_for_thread(
+            engine, bot.bindings_store, interaction.channel_id
+        )
+        games_won, games_lost, games_drawn = parse_score(score)
+        engine.report_result(
+            target.tournament_id,
+            match.match_id,
+            reported_by=str(interaction.user.id),
+            winner=str(winner.id) if winner is not None else None,
+            games_won=games_won,
+            games_lost=games_lost,
+            games_drawn=games_drawn,
+        )
+        reporter = str(interaction.user.id)
+        opponent = match.player_b if reporter == match.player_a else match.player_a
+        assert opponent is not None
+        outcome = (
+            f"a **{format_score(games_won, games_lost, games_drawn)} draw**"
+            if winner is None
+            else f"**{winner.mention} won "
+            f"{format_score(games_won, games_lost, games_drawn)}**"
+        )
+        view = discord.ui.View(timeout=None)
+        view.add_item(ConfirmResultButton(match.match_id))
+        view.add_item(DisputeResultButton(match.match_id))
+        await interaction.response.send_message(
+            f"{interaction.user.mention} reports {outcome}.\n"
+            f"<@{opponent}> — confirm or dispute:",
+            view=view,
+            allowed_mentions=discord.AllowedMentions(
+                everyone=False, roles=False, users=[discord.Object(int(opponent))]
+            ),
         )
 
     @bot.tree.command(description="Check that the bot is alive")
