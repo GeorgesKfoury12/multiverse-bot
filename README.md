@@ -14,7 +14,7 @@ pairings, standings, and match tracking, right from Discord.
 git clone git@github.com:GeorgesKfoury12/multiverse-bot.git
 cd multiverse-bot
 uv sync
-cp .env.example .env  # then paste your Discord bot token into .env
+cp .env.example .env  # then fill in DISCORD_TOKEN and TO_ROLE_ID (see comments)
 ```
 
 ## Running
