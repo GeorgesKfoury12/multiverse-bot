@@ -7,6 +7,7 @@ seed recorded in the history, never from ambient entropy.
 """
 
 import random
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
 
@@ -114,6 +115,22 @@ class _MatchResult:
     reported_by: str | None
 
 
+def _match_points_for(result: _Result, player: str, ruleset: Ruleset) -> int:
+    if result.winner is None:
+        return ruleset.match_points_draw
+    if player == result.winner:
+        return ruleset.match_points_win
+    return ruleset.match_points_loss
+
+
+def _games_won_by(result: _Result, player: str) -> int:
+    # A drawn Match's game score is symmetric (e.g. 1-1-1), so the winner's
+    # side of the score reads correctly for both players.
+    if result.winner is None or player == result.winner:
+        return result.games_won
+    return result.games_lost
+
+
 @dataclass
 class _TournamentState:
     tournament_id: str
@@ -192,7 +209,9 @@ class TournamentEngine:
         existing = tournament.results_by_match.get(match_id)
         if existing is not None and existing.status == "confirmed":
             raise EngineError(f"{match_id} already has a confirmed result")
-        self._validate_score(match, winner, games_won, games_lost, games_drawn)
+        self._validate_score(
+            match, tournament.ruleset, winner, games_won, games_lost, games_drawn
+        )
         self._record(
             ResultReported(
                 tournament_id,
@@ -229,7 +248,9 @@ class TournamentEngine:
             )
         self._record(ResultDisputed(tournament_id, match_id, disputed_by))
 
-    def to_confirm_result(self, tournament_id: str, match_id: str, actor: str) -> None:
+    def confirm_result_as_to(
+        self, tournament_id: str, match_id: str, actor: str
+    ) -> None:
         """The TO confirms a Pending or Disputed result as reported.
 
         The engine records ``actor`` but cannot know Discord roles; the caller
@@ -255,8 +276,10 @@ class TournamentEngine:
         The engine records ``assigned_by`` but cannot know Discord roles; the
         caller is responsible for only routing TOs here.
         """
-        _, match = self._open_match(tournament_id, match_id)
-        self._validate_score(match, winner, games_won, games_lost, games_drawn)
+        tournament, match = self._open_match(tournament_id, match_id)
+        self._validate_score(
+            match, tournament.ruleset, winner, games_won, games_lost, games_drawn
+        )
         self._record(
             ResultAssigned(
                 tournament_id,
@@ -474,34 +497,20 @@ class TournamentEngine:
         # drawn-Match point split in the ruleset).
         ruleset = state.ruleset
         records: dict[str, list[MatchRecord]] = {player: [] for player in state.players}
-        for match_id, entry in state.results_by_match.items():
-            if entry.status != "confirmed":
-                continue
-            match = state.matches_by_id[match_id]
+        for match, result in TournamentEngine._confirmed_results(state):
             if match.is_bye:
                 continue
             assert match.player_b is not None
-            result = entry.result
             games_played = result.games_won + result.games_lost + result.games_drawn
             for player, opponent in (
                 (match.player_a, match.player_b),
                 (match.player_b, match.player_a),
             ):
-                if result.winner is None:
-                    # A drawn Match's game score is symmetric (e.g. 1-1-1).
-                    match_points = ruleset.match_points_draw
-                    games_won = result.games_won
-                else:
-                    won = player == result.winner
-                    match_points = (
-                        ruleset.match_points_win if won else ruleset.match_points_loss
-                    )
-                    games_won = result.games_won if won else result.games_lost
                 records[player].append(
                     MatchRecord(
                         opponent=opponent,
-                        match_points=match_points,
-                        games_won=games_won,
+                        match_points=_match_points_for(result, player, ruleset),
+                        games_won=_games_won_by(result, player),
                         games_played=games_played,
                     )
                 )
@@ -516,26 +525,19 @@ class TournamentEngine:
         # replaces a confirmed result never leaves stale points behind.
         ruleset = state.ruleset
         points = {player: 0 for player in state.players}
-        for match_id, entry in state.results_by_match.items():
-            if entry.status != "confirmed":
-                continue
-            match = state.matches_by_id[match_id]
-            result = entry.result
+        for match, result in self._confirmed_results(state):
             if match.is_bye:
                 points[match.player_a] += ruleset.match_points_win
-            elif result.winner is None:
-                points[match.player_a] += ruleset.match_points_draw
-                points[match.player_b] += ruleset.match_points_draw
-            else:
-                loser = (
-                    match.player_b
-                    if result.winner == match.player_a
-                    else match.player_a
-                )
-                assert loser is not None
-                points[result.winner] += ruleset.match_points_win
-                points[loser] += ruleset.match_points_loss
+                continue
+            for player in (match.player_a, match.player_b):
+                points[player] += _match_points_for(result, player, ruleset)
         state.match_points = points
+
+    @staticmethod
+    def _confirmed_results(state: _TournamentState) -> Iterator[tuple[Match, _Result]]:
+        for match_id, entry in state.results_by_match.items():
+            if entry.status == "confirmed":
+                yield state.matches_by_id[match_id], entry.result
 
     @staticmethod
     def _is_confirmed(state: _TournamentState, match_id: str) -> bool:
@@ -575,6 +577,7 @@ class TournamentEngine:
     @staticmethod
     def _validate_score(
         match: Match,
+        ruleset: Ruleset,
         winner: str | None,
         games_won: int,
         games_lost: int,
@@ -584,8 +587,14 @@ class TournamentEngine:
             raise EngineError(f"{match.match_id} is a Bye; it comes pre-scored")
         if min(games_won, games_lost, games_drawn) < 0:
             raise EngineError("game counts cannot be negative")
-        if games_won + games_lost + games_drawn == 0:
+        total_games = games_won + games_lost + games_drawn
+        if total_games == 0:
             raise EngineError("a result needs at least one game")
+        if total_games > ruleset.best_of:
+            raise EngineError(
+                f"{games_won}-{games_lost}-{games_drawn} has more than "
+                f"{ruleset.best_of} games in a best-of-{ruleset.best_of} Match"
+            )
         if winner is None:
             if games_won != games_lost:
                 raise EngineError(
@@ -597,6 +606,14 @@ class TournamentEngine:
             if games_won <= games_lost:
                 raise EngineError(
                     f"{games_won}-{games_lost} is not a winning score for {winner}"
+                )
+            # The Match ends once a player reaches the winning game count, so
+            # e.g. 3-0 can never happen in a best-of-3.
+            wins_needed = ruleset.best_of // 2 + 1
+            if games_won > wins_needed:
+                raise EngineError(
+                    f"{games_won}-{games_lost} is not reachable in a "
+                    f"best-of-{ruleset.best_of} Match"
                 )
 
     @staticmethod
