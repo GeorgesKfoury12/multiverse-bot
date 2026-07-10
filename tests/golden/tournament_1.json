@@ -1,0 +1,826 @@
+{
+  "name": "Multiverse Weekly League I",
+  "game": "riftbound",
+  "seed": 4217,
+  "round_count": 5,
+  "players": [
+    "ahri",
+    "akali",
+    "ashe",
+    "braum",
+    "caitlyn",
+    "darius",
+    "draven",
+    "ekko",
+    "ezreal",
+    "fiora",
+    "galio",
+    "garen",
+    "janna",
+    "jinx",
+    "karma",
+    "leona",
+    "lucian",
+    "lulu",
+    "lux",
+    "malphite"
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "drops": [],
+      "matches": [
+        {
+          "match_id": "T1-R1-M1",
+          "player_a": "ahri",
+          "player_b": "lulu",
+          "winner": "ahri",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M2",
+          "player_a": "lux",
+          "player_b": "leona",
+          "winner": "leona",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M3",
+          "player_a": "lucian",
+          "player_b": "darius",
+          "winner": "lucian",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M4",
+          "player_a": "caitlyn",
+          "player_b": "ashe",
+          "winner": "ashe",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M5",
+          "player_a": "garen",
+          "player_b": "draven",
+          "winner": "draven",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M6",
+          "player_a": "ekko",
+          "player_b": "braum",
+          "winner": "braum",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M7",
+          "player_a": "akali",
+          "player_b": "jinx",
+          "winner": "akali",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M8",
+          "player_a": "fiora",
+          "player_b": "galio",
+          "winner": "galio",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M9",
+          "player_a": "karma",
+          "player_b": "malphite",
+          "winner": "karma",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M10",
+          "player_a": "janna",
+          "player_b": "ezreal",
+          "winner": "ezreal",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "drops": [],
+      "matches": [
+        {
+          "match_id": "T1-R2-M1",
+          "player_a": "braum",
+          "player_b": "galio",
+          "winner": "galio",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M2",
+          "player_a": "ashe",
+          "player_b": "karma",
+          "winner": "karma",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M3",
+          "player_a": "lucian",
+          "player_b": "akali",
+          "winner": null,
+          "games": [
+            1,
+            1,
+            1
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M4",
+          "player_a": "draven",
+          "player_b": "ezreal",
+          "winner": "ezreal",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M5",
+          "player_a": "ahri",
+          "player_b": "leona",
+          "winner": "ahri",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M6",
+          "player_a": "jinx",
+          "player_b": "ekko",
+          "winner": "ekko",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M7",
+          "player_a": "darius",
+          "player_b": "caitlyn",
+          "winner": "caitlyn",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M8",
+          "player_a": "malphite",
+          "player_b": "lux",
+          "winner": "lux",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M9",
+          "player_a": "lulu",
+          "player_b": "janna",
+          "winner": "janna",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M10",
+          "player_a": "garen",
+          "player_b": "fiora",
+          "winner": "garen",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "drops": [
+        "galio"
+      ],
+      "matches": [
+        {
+          "match_id": "T1-R3-M1",
+          "player_a": "galio",
+          "player_b": "karma",
+          "winner": "karma",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "assigned"
+        },
+        {
+          "match_id": "T1-R3-M2",
+          "player_a": "ahri",
+          "player_b": "ezreal",
+          "winner": "ezreal",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M3",
+          "player_a": "akali",
+          "player_b": "garen",
+          "winner": "akali",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M4",
+          "player_a": "lucian",
+          "player_b": "leona",
+          "winner": "leona",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M5",
+          "player_a": "caitlyn",
+          "player_b": "ekko",
+          "winner": "ekko",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M6",
+          "player_a": "janna",
+          "player_b": "draven",
+          "winner": "draven",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M7",
+          "player_a": "braum",
+          "player_b": "lux",
+          "winner": "braum",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M8",
+          "player_a": "ashe",
+          "player_b": "lulu",
+          "winner": "ashe",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M9",
+          "player_a": "jinx",
+          "player_b": "fiora",
+          "winner": "fiora",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M10",
+          "player_a": "darius",
+          "player_b": "malphite",
+          "winner": "darius",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        }
+      ]
+    },
+    {
+      "round": 4,
+      "drops": [],
+      "matches": [
+        {
+          "match_id": "T1-R4-M1",
+          "player_a": "ezreal",
+          "player_b": "karma",
+          "winner": "ezreal",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M2",
+          "player_a": "akali",
+          "player_b": "draven",
+          "winner": "akali",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M3",
+          "player_a": "ahri",
+          "player_b": "braum",
+          "winner": null,
+          "games": [
+            1,
+            1,
+            1
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M4",
+          "player_a": "ashe",
+          "player_b": "leona",
+          "winner": null,
+          "games": [
+            1,
+            1,
+            1
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M5",
+          "player_a": "ekko",
+          "player_b": "lucian",
+          "winner": "lucian",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M6",
+          "player_a": "fiora",
+          "player_b": "caitlyn",
+          "winner": "caitlyn",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M7",
+          "player_a": "garen",
+          "player_b": "lux",
+          "winner": null,
+          "games": [
+            1,
+            1,
+            1
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M8",
+          "player_a": "janna",
+          "player_b": "darius",
+          "winner": "darius",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M9",
+          "player_a": "jinx",
+          "player_b": "malphite",
+          "winner": "jinx",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M10",
+          "player_a": "lulu",
+          "player_b": null,
+          "winner": "lulu",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "bye"
+        }
+      ]
+    },
+    {
+      "round": 5,
+      "drops": [
+        "janna"
+      ],
+      "matches": [
+        {
+          "match_id": "T1-R5-M1",
+          "player_a": "ezreal",
+          "player_b": "akali",
+          "winner": "akali",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M2",
+          "player_a": "karma",
+          "player_b": "lucian",
+          "winner": "karma",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M3",
+          "player_a": "braum",
+          "player_b": "leona",
+          "winner": "braum",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M4",
+          "player_a": "ahri",
+          "player_b": "ashe",
+          "winner": "ahri",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M5",
+          "player_a": "darius",
+          "player_b": "ekko",
+          "winner": "darius",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M6",
+          "player_a": "caitlyn",
+          "player_b": "draven",
+          "winner": "caitlyn",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M7",
+          "player_a": "garen",
+          "player_b": "jinx",
+          "winner": "garen",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M8",
+          "player_a": "lux",
+          "player_b": "lulu",
+          "winner": "lulu",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M9",
+          "player_a": "janna",
+          "player_b": "fiora",
+          "winner": "fiora",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "assigned"
+        },
+        {
+          "match_id": "T1-R5-M10",
+          "player_a": "malphite",
+          "player_b": null,
+          "winner": "malphite",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "bye"
+        }
+      ]
+    }
+  ],
+  "expected_standings": [
+    {
+      "rank": 1,
+      "player": "akali",
+      "match_points": 13,
+      "omw": "37/75",
+      "gw": "9/13",
+      "ogw": "439/910"
+    },
+    {
+      "rank": 2,
+      "player": "ezreal",
+      "match_points": 12,
+      "omw": "46/75",
+      "gw": "9/14",
+      "ogw": "1523/2730"
+    },
+    {
+      "rank": 3,
+      "player": "karma",
+      "match_points": 12,
+      "omw": "41/75",
+      "gw": "9/13",
+      "ogw": "52/105"
+    },
+    {
+      "rank": 4,
+      "player": "ahri",
+      "match_points": 10,
+      "omw": "41/75",
+      "gw": "4/7",
+      "ogw": "73279/150150"
+    },
+    {
+      "rank": 5,
+      "player": "braum",
+      "match_points": 10,
+      "omw": "38/75",
+      "gw": "7/13",
+      "ogw": "3307/6825"
+    },
+    {
+      "rank": 6,
+      "player": "caitlyn",
+      "match_points": 9,
+      "omw": "34/75",
+      "gw": "4/7",
+      "ogw": "45/91"
+    },
+    {
+      "rank": 7,
+      "player": "darius",
+      "match_points": 9,
+      "omw": "32/75",
+      "gw": "8/13",
+      "ogw": "13/30"
+    },
+    {
+      "rank": 8,
+      "player": "lucian",
+      "match_points": 7,
+      "omw": "47/75",
+      "gw": "1/2",
+      "ogw": "304/525"
+    },
+    {
+      "rank": 9,
+      "player": "ashe",
+      "match_points": 7,
+      "omw": "43/75",
+      "gw": "3/7",
+      "ogw": "40022/75075"
+    },
+    {
+      "rank": 10,
+      "player": "leona",
+      "match_points": 7,
+      "omw": "13/25",
+      "gw": "7/15",
+      "ogw": "63/130"
+    },
+    {
+      "rank": 11,
+      "player": "garen",
+      "match_points": 7,
+      "omw": "7/15",
+      "gw": "5/13",
+      "ogw": "32/65"
+    },
+    {
+      "rank": 12,
+      "player": "galio",
+      "match_points": 6,
+      "omw": "28/45",
+      "gw": "4/7",
+      "ogw": "15/26"
+    },
+    {
+      "rank": 13,
+      "player": "draven",
+      "match_points": 6,
+      "omw": "46/75",
+      "gw": "1/2",
+      "ogw": "1433/2730"
+    },
+    {
+      "rank": 14,
+      "player": "ekko",
+      "match_points": 6,
+      "omw": "8/15",
+      "gw": "3/7",
+      "ogw": "95/182"
+    },
+    {
+      "rank": 15,
+      "player": "fiora",
+      "match_points": 6,
+      "omw": "12/25",
+      "gw": "1/2",
+      "ogw": "613/1365"
+    },
+    {
+      "rank": 16,
+      "player": "lulu",
+      "match_points": 6,
+      "omw": "9/20",
+      "gw": "4/11",
+      "ogw": "67/156"
+    },
+    {
+      "rank": 17,
+      "player": "lux",
+      "match_points": 4,
+      "omw": "34/75",
+      "gw": "5/13",
+      "ogw": "1492/3575"
+    },
+    {
+      "rank": 18,
+      "player": "malphite",
+      "match_points": 3,
+      "omw": "31/60",
+      "gw": "1/9",
+      "ogw": "27/52"
+    },
+    {
+      "rank": 19,
+      "player": "janna",
+      "match_points": 3,
+      "omw": "38/75",
+      "gw": "2/11",
+      "ogw": "5249/10010"
+    },
+    {
+      "rank": 20,
+      "player": "jinx",
+      "match_points": 3,
+      "omw": "37/75",
+      "gw": "5/13",
+      "ogw": "1277/2730"
+    }
+  ]
+}

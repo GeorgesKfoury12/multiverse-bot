@@ -1,0 +1,803 @@
+{
+  "name": "Multiverse Weekly League II",
+  "game": "riftbound",
+  "seed": 90210,
+  "round_count": 5,
+  "players": [
+    "morgana",
+    "nami",
+    "nasus",
+    "olaf",
+    "orianna",
+    "poppy",
+    "quinn",
+    "rakan",
+    "rell",
+    "renekton",
+    "riven",
+    "samira",
+    "sejuani",
+    "senna",
+    "sett",
+    "shen",
+    "sona",
+    "soraka",
+    "swain"
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "drops": [],
+      "matches": [
+        {
+          "match_id": "T1-R1-M1",
+          "player_a": "soraka",
+          "player_b": "nami",
+          "winner": "soraka",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M2",
+          "player_a": "riven",
+          "player_b": "samira",
+          "winner": "samira",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M3",
+          "player_a": "orianna",
+          "player_b": "senna",
+          "winner": "orianna",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M4",
+          "player_a": "olaf",
+          "player_b": "renekton",
+          "winner": "renekton",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M5",
+          "player_a": "sejuani",
+          "player_b": "morgana",
+          "winner": "morgana",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M6",
+          "player_a": "rakan",
+          "player_b": "nasus",
+          "winner": "nasus",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M7",
+          "player_a": "rell",
+          "player_b": "sett",
+          "winner": "sett",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M8",
+          "player_a": "sona",
+          "player_b": "quinn",
+          "winner": "quinn",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M9",
+          "player_a": "poppy",
+          "player_b": "swain",
+          "winner": null,
+          "games": [
+            1,
+            1,
+            1
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R1-M10",
+          "player_a": "shen",
+          "player_b": null,
+          "winner": "shen",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "bye"
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "drops": [],
+      "matches": [
+        {
+          "match_id": "T1-R2-M1",
+          "player_a": "soraka",
+          "player_b": "orianna",
+          "winner": null,
+          "games": [
+            1,
+            1,
+            1
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M2",
+          "player_a": "shen",
+          "player_b": "morgana",
+          "winner": "morgana",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M3",
+          "player_a": "nasus",
+          "player_b": "renekton",
+          "winner": "renekton",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M4",
+          "player_a": "samira",
+          "player_b": "sett",
+          "winner": "samira",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M5",
+          "player_a": "quinn",
+          "player_b": "poppy",
+          "winner": null,
+          "games": [
+            1,
+            1,
+            1
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M6",
+          "player_a": "swain",
+          "player_b": "sejuani",
+          "winner": "sejuani",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M7",
+          "player_a": "nami",
+          "player_b": "riven",
+          "winner": "nami",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M8",
+          "player_a": "senna",
+          "player_b": "sona",
+          "winner": "senna",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M9",
+          "player_a": "olaf",
+          "player_b": "rell",
+          "winner": "olaf",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R2-M10",
+          "player_a": "rakan",
+          "player_b": null,
+          "winner": "rakan",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "bye"
+        }
+      ]
+    },
+    {
+      "round": 3,
+      "drops": [],
+      "matches": [
+        {
+          "match_id": "T1-R3-M1",
+          "player_a": "samira",
+          "player_b": "renekton",
+          "winner": "renekton",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M2",
+          "player_a": "morgana",
+          "player_b": "orianna",
+          "winner": "morgana",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M3",
+          "player_a": "quinn",
+          "player_b": "soraka",
+          "winner": null,
+          "games": [
+            1,
+            1,
+            1
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M4",
+          "player_a": "rakan",
+          "player_b": "sejuani",
+          "winner": "rakan",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M5",
+          "player_a": "senna",
+          "player_b": "nami",
+          "winner": "nami",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M6",
+          "player_a": "olaf",
+          "player_b": "sett",
+          "winner": "olaf",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M7",
+          "player_a": "shen",
+          "player_b": "nasus",
+          "winner": "shen",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M8",
+          "player_a": "poppy",
+          "player_b": "riven",
+          "winner": "poppy",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M9",
+          "player_a": "swain",
+          "player_b": "rell",
+          "winner": "rell",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R3-M10",
+          "player_a": "sona",
+          "player_b": null,
+          "winner": "sona",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "bye"
+        }
+      ]
+    },
+    {
+      "round": 4,
+      "drops": [
+        "olaf"
+      ],
+      "matches": [
+        {
+          "match_id": "T1-R4-M1",
+          "player_a": "morgana",
+          "player_b": "renekton",
+          "winner": "renekton",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M2",
+          "player_a": "samira",
+          "player_b": "nami",
+          "winner": "nami",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M3",
+          "player_a": "rakan",
+          "player_b": "shen",
+          "winner": "rakan",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M4",
+          "player_a": "olaf",
+          "player_b": "quinn",
+          "winner": "quinn",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "assigned"
+        },
+        {
+          "match_id": "T1-R4-M5",
+          "player_a": "poppy",
+          "player_b": "soraka",
+          "winner": "poppy",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M6",
+          "player_a": "orianna",
+          "player_b": "rell",
+          "winner": "rell",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M7",
+          "player_a": "sona",
+          "player_b": "sejuani",
+          "winner": "sona",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M8",
+          "player_a": "nasus",
+          "player_b": "senna",
+          "winner": "nasus",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M9",
+          "player_a": "sett",
+          "player_b": "swain",
+          "winner": "swain",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R4-M10",
+          "player_a": "riven",
+          "player_b": null,
+          "winner": "riven",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "bye"
+        }
+      ]
+    },
+    {
+      "round": 5,
+      "drops": [],
+      "matches": [
+        {
+          "match_id": "T1-R5-M1",
+          "player_a": "renekton",
+          "player_b": "nami",
+          "winner": "nami",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M2",
+          "player_a": "morgana",
+          "player_b": "rakan",
+          "winner": "morgana",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M3",
+          "player_a": "quinn",
+          "player_b": "nasus",
+          "winner": "nasus",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M4",
+          "player_a": "poppy",
+          "player_b": "sona",
+          "winner": "poppy",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M5",
+          "player_a": "shen",
+          "player_b": "rell",
+          "winner": "rell",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M6",
+          "player_a": "samira",
+          "player_b": "soraka",
+          "winner": "samira",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M7",
+          "player_a": "swain",
+          "player_b": "orianna",
+          "winner": "orianna",
+          "games": [
+            2,
+            0,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M8",
+          "player_a": "sejuani",
+          "player_b": "sett",
+          "winner": "sejuani",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        },
+        {
+          "match_id": "T1-R5-M9",
+          "player_a": "riven",
+          "player_b": "senna",
+          "winner": "riven",
+          "games": [
+            2,
+            1,
+            0
+          ],
+          "via": "reported"
+        }
+      ]
+    }
+  ],
+  "expected_standings": [
+    {
+      "rank": 1,
+      "player": "renekton",
+      "match_points": 12,
+      "omw": "33/50",
+      "gw": "4/7",
+      "ogw": "43378/75075"
+    },
+    {
+      "rank": 2,
+      "player": "morgana",
+      "match_points": 12,
+      "omw": "1/2",
+      "gw": "9/14",
+      "ogw": "147013/300300"
+    },
+    {
+      "rank": 3,
+      "player": "nami",
+      "match_points": 12,
+      "omw": "12/25",
+      "gw": "9/14",
+      "ogw": "2267/5005"
+    },
+    {
+      "rank": 4,
+      "player": "poppy",
+      "match_points": 11,
+      "omw": "28/75",
+      "gw": "4/7",
+      "ogw": "24289/60060"
+    },
+    {
+      "rank": 5,
+      "player": "rakan",
+      "match_points": 9,
+      "omw": "8/15",
+      "gw": "5/11",
+      "ogw": "173/336"
+    },
+    {
+      "rank": 6,
+      "player": "samira",
+      "match_points": 9,
+      "omw": "13/25",
+      "gw": "8/13",
+      "ogw": "524/1155"
+    },
+    {
+      "rank": 7,
+      "player": "nasus",
+      "match_points": 9,
+      "omw": "1/2",
+      "gw": "8/15",
+      "ogw": "425/924"
+    },
+    {
+      "rank": 8,
+      "player": "rell",
+      "match_points": 9,
+      "omw": "59/150",
+      "gw": "8/15",
+      "ogw": "1217/2860"
+    },
+    {
+      "rank": 9,
+      "player": "quinn",
+      "match_points": 8,
+      "omw": "1/2",
+      "gw": "1/2",
+      "ogw": "3593/7700"
+    },
+    {
+      "rank": 10,
+      "player": "orianna",
+      "match_points": 7,
+      "omw": "12/25",
+      "gw": "7/13",
+      "ogw": "6211/13650"
+    },
+    {
+      "rank": 11,
+      "player": "shen",
+      "match_points": 6,
+      "omw": "5/8",
+      "gw": "5/12",
+      "ogw": "4999/9240"
+    },
+    {
+      "rank": 12,
+      "player": "riven",
+      "match_points": 6,
+      "omw": "37/60",
+      "gw": "4/11",
+      "ogw": "199/364"
+    },
+    {
+      "rank": 13,
+      "player": "olaf",
+      "match_points": 6,
+      "omw": "17/30",
+      "gw": "5/11",
+      "ogw": "407/840"
+    },
+    {
+      "rank": 14,
+      "player": "sona",
+      "match_points": 6,
+      "omw": "1/2",
+      "gw": "5/12",
+      "ogw": "199/420"
+    },
+    {
+      "rank": 15,
+      "player": "sejuani",
+      "match_points": 6,
+      "omw": "23/50",
+      "gw": "7/15",
+      "ogw": "8937/20020"
+    },
+    {
+      "rank": 16,
+      "player": "soraka",
+      "match_points": 5,
+      "omw": "47/75",
+      "gw": "5/14",
+      "ogw": "261/455"
+    },
+    {
+      "rank": 17,
+      "player": "swain",
+      "match_points": 4,
+      "omw": "38/75",
+      "gw": "5/13",
+      "ogw": "667/1365"
+    },
+    {
+      "rank": 18,
+      "player": "senna",
+      "match_points": 3,
+      "omw": "38/75",
+      "gw": "5/14",
+      "ogw": "49949/100100"
+    },
+    {
+      "rank": 19,
+      "player": "sett",
+      "match_points": 3,
+      "omw": "73/150",
+      "gw": "4/13",
+      "ogw": "27/55"
+    }
+  ]
+}
