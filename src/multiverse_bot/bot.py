@@ -833,7 +833,7 @@ class PendingResultButton(
 
 
 _TO_CONFIRM_TEMPLATE = (
-    r"multiverse:to-(?P<operation>start|drop|forceclose|end|reopen):"
+    r"multiverse:to-(?P<operation>start|drop|unregister|forceclose|end|reopen):"
     r"(?P<tournament_id>[^:]+):(?P<argument>[^:]+)"
 )
 
@@ -849,8 +849,9 @@ class TOConfirmButton(
 
     Like the confirm/Dispute buttons, everything lives in the custom_id so a
     click works across restarts: ``argument`` is the round count (start), the
-    player (drop), the Round the preview described (forceclose/end), or the
-    Round a reopen would reopen (reopen) — Round-scoped clicks are refused
+    player (drop/unregister), the Round the preview described
+    (forceclose/end), or the Round a reopen would reopen (reopen) —
+    Round-scoped clicks are refused
     once the Round has moved on, so the button never acts on a situation the
     TO did not sign off."""
 
@@ -885,6 +886,7 @@ class TOConfirmButton(
         operations = {
             "start": self._start,
             "drop": self._drop,
+            "unregister": self._unregister,
             "forceclose": self._force_close,
             "end": self._end,
             "reopen": self._reopen,
@@ -947,6 +949,42 @@ class TOConfirmButton(
         except (CommandError, discord.HTTPException) as error:
             await interaction.followup.send(
                 f"The Drop is recorded, but announcing it failed: {error}",
+                ephemeral=True,
+            )
+
+    async def _unregister(
+        self, bot: MultiverseBot, interaction: discord.Interaction
+    ) -> None:
+        """The TO removes a registrant before the start (issue #20) — the
+        "drop" half of resolving a straggler, distinct from a Drop: they
+        leave the sign-up list entirely, Deck and all. The engine re-checks
+        the phase, refusing a click that outraced the start."""
+        tournament = bot.engine.tournament(self.tournament_id)
+        bot.engine.unregister_player(
+            self.tournament_id, self.argument, unregistered_by=str(interaction.user.id)
+        )
+        bot.deck_images.delete_image(self.tournament_id, self.argument)
+        await interaction.response.edit_message(
+            content=f"<@{self.argument}> is unregistered from **{tournament.name}**.",
+            view=None,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+        try:
+            channel = await bound_channel(bot, self.tournament_id, "pairings")
+            await channel.send(
+                f"🚪 The TO unregistered <@{self.argument}> from "
+                f"**{tournament.name}** — off the sign-up list, any submitted "
+                "Deck discarded. Signing up again while registration is open "
+                "starts fresh.",
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=False,
+                    roles=False,
+                    users=[discord.Object(int(self.argument))],
+                ),
+            )
+        except (CommandError, discord.HTTPException) as error:
+            await interaction.followup.send(
+                f"The unregister is recorded, but announcing it failed: {error}",
                 ephemeral=True,
             )
 
@@ -1497,6 +1535,51 @@ def _install_commands(bot: MultiverseBot) -> None:
         )
 
     @tournament_group.command(
+        name="unregister",
+        description="Remove a player from the sign-up list before the start",
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(
+        player="Who to unregister",
+        tournament="Tournament ID or name; defaults if unique",
+    )
+    async def to_unregister(
+        interaction: discord.Interaction,
+        player: discord.Member,
+        tournament: str | None = None,
+    ) -> None:
+        """Preview + confirm: the TO resolves a deck-less straggler blocking
+        the start (issue #20) — the "drop" half of "chase or drop", though
+        distinct from a Drop: the player leaves the roster entirely, Deck and
+        all, and never appears in Standings. Re-registering starts fresh."""
+        target = resolve_tournament(engine, tournament, _STARTABLE, "still in signups")
+        player_id = str(player.id)
+        # The engine holds the same line; saying it here keeps the refusal in
+        # mention form rather than a raw ID.
+        if player_id not in target.players:
+            raise CommandError(
+                f"{player.mention} is not registered in **{target.name}**"
+            )
+        deck_note = (
+            "they have no Deck on file"
+            if player_id in engine.players_missing_decks(target.tournament_id)
+            else "their submitted Deck is discarded"
+        )
+        await interaction.response.send_message(
+            f"Unregister {player.mention} from **{target.name}**? They leave "
+            f"the sign-up list entirely ({deck_note}); signing up again while "
+            "registration is open starts fresh.",
+            view=to_confirmation(
+                "unregister",
+                target.tournament_id,
+                player_id,
+                f"Unregister {player.display_name}",
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @tournament_group.command(
         name="end-early",
         description="End the Tournament between Rounds; Standings become final",
     )
@@ -1573,6 +1656,30 @@ def _install_commands(bot: MultiverseBot) -> None:
             f"{interaction.user.mention} is in **{target.name}** — "
             f"{count} signed up so far. Lock in your Deck with `/submit-deck` "
             "before the start."
+        )
+
+    @bot.tree.command(description="Leave a Tournament's sign-up list before it starts")
+    @app_commands.guild_only()
+    @app_commands.describe(tournament="Tournament ID or name; defaults if unique")
+    async def unregister(
+        interaction: discord.Interaction, tournament: str | None = None
+    ) -> None:
+        """The self-service mirror of `/signup` (issue #20): the player leaves
+        the roster entirely, Deck and all — no confirm step, matching signup.
+        Signing up again while registration is open starts fresh."""
+        target = resolve_tournament(engine, tournament, _STARTABLE, "still in signups")
+        player_id = str(interaction.user.id)
+        if player_id not in target.players:
+            raise CommandError(f"you are not signed up for **{target.name}**")
+        engine.unregister_player(
+            target.tournament_id, player_id, unregistered_by=player_id
+        )
+        bot.deck_images.delete_image(target.tournament_id, player_id)
+        count = len(engine.tournament(target.tournament_id).players)
+        await interaction.response.send_message(
+            f"{interaction.user.mention} has left **{target.name}** — "
+            f"{count} still signed up. Changed your mind? `/signup` again "
+            "while registration is open; your Deck starts fresh."
         )
 
     @bot.tree.command(

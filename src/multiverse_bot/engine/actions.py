@@ -40,6 +40,19 @@ class PlayerRegistered:
 
 
 @dataclass(frozen=True)
+class PlayerUnregistered:
+    """A registered player leaves the sign-up list before the start — self-
+    initiated or by the TO resolving a deck-less straggler (issue #20;
+    ``unregistered_by`` records which). Distinct from a Drop: they leave the
+    roster entirely, their submitted Deck goes with them, and they never
+    appear in Standings. Re-registering afterwards starts fresh."""
+
+    tournament_id: str
+    player_id: str
+    unregistered_by: str
+
+
+@dataclass(frozen=True)
 class DeckSubmitted:
     """A player locks in their Deck for the Tournament, replacing any earlier
     submission — only the latest counts. ``deck`` is opaque (an image
@@ -148,6 +161,7 @@ Action = (
     | RegistrationOpened
     | RegistrationClosed
     | PlayerRegistered
+    | PlayerUnregistered
     | DeckSubmitted
     | TournamentStarted
     | ResultReported

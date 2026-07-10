@@ -27,7 +27,7 @@ _Avoid_: admin, mod (Discord roles are not domain roles)
 The list a player locks in for a whole Tournament, submitted privately to the bot before the start — typically a screenshot image (preferred; easiest to read during open-decklist play), or a text list or deckbuilder link. Stored and Revealed verbatim, unparsed. Resubmitting before the start replaces it; only the latest counts. The TO can view Decks at any time.
 
 **Sealed / Reveal**:
-Decks are Sealed (visible only to their owner and the TO) until the Tournament starts, then Revealed to everyone at once — Tournaments are open-decklist. A Tournament cannot start while a registered player has no Deck; the TO resolves stragglers (chase or drop).
+Decks are Sealed (visible only to their owner and the TO) until the Tournament starts, then Revealed to everyone at once — Tournaments are open-decklist. A Tournament cannot start while a registered player has no Deck; the TO resolves stragglers (chase or Unregister).
 
 **Reported Result**:
 A Match result submitted by either player as winner + game score (e.g. "Georges won 2-1"). It is Pending until the opponent confirms or disputes it; the TO can confirm, correct, or replace it any time before the Round closes. Frozen once the Round closes, unless the TO reopens the Round.
@@ -39,8 +39,12 @@ The state of a Reported Result awaiting opponent confirmation. A Round cannot au
 The opponent's explicit rejection of a Pending result, flagging the Match for TO resolution. There is no auto-confirm timer.
 
 **Drop**:
-A player's permanent exit from a Tournament between Rounds, whether self-initiated or TO-initiated (e.g. unresponsiveness). Dropped players are not paired again but their played Matches still count for opponents' points and Tiebreakers; they keep their place in Standings. Not retroactive, not reversible.
+A player's permanent exit from a Tournament between Rounds, whether self-initiated or TO-initiated (e.g. unresponsiveness). Dropped players are not paired again but their played Matches still count for opponents' points and Tiebreakers; they keep their place in Standings. Not retroactive, not reversible. Before the start, leaving is an Unregister instead.
 _Avoid_: kick, remove (deletion is exactly what a Drop is not)
+
+**Unregister**:
+A registered player's exit from the sign-up list before the Tournament starts, whether self-initiated or TO-initiated (the remedy for a deck-less straggler blocking the start). Unlike a Drop, nothing survives it: the player leaves the roster entirely, their submitted Deck goes with them, and they never appear in Standings. Signing up again while registration is open starts fresh.
+_Avoid_: withdraw, kick
 
 **Assigned Result**:
 A Match result set by the TO instead of reported by the players — used for no-shows and force-closed Rounds. Counts identically to a reported result once set.
