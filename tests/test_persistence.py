@@ -180,6 +180,25 @@ def test_a_failed_persist_rolls_the_engine_back_in_step_with_the_log() -> None:
     assert engine.history == tuple(persisted)
 
 
+def test_a_reopened_round_survives_a_restart(tmp_path: Path) -> None:
+    """A reopen recorded just before a crash reloads mid-correction: the
+    previous Round is open again and the reverted Pairings stay gone."""
+    db = tmp_path / "tournaments.db"
+    engine = open_engine(db)
+    tournament_id = start_four_player_tournament(engine)
+    confirm_round(engine, tournament_id, 1)
+    engine.reopen_round(tournament_id, reopened_by="the-to")
+
+    reloaded = open_engine(db)
+
+    assert reloaded.history == engine.history
+    assert reloaded.tournament(tournament_id) == engine.tournament(tournament_id)
+    assert reloaded.tournament(tournament_id).current_round == 1
+    assert reloaded.pairings(tournament_id, 1) == engine.pairings(tournament_id, 1)
+    with pytest.raises(EngineError):
+        reloaded.pairings(tournament_id, 2)
+
+
 def test_full_lifecycle_with_draw_drop_bye_and_early_end_round_trips(
     tmp_path: Path,
 ) -> None:

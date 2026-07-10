@@ -321,6 +321,60 @@ def require_current_round(tournament: Tournament, round_number: int) -> None:
         )
 
 
+def reopen_preview(
+    engine: TournamentEngine, tournament: Tournament
+) -> tuple[int, list[str]]:
+    """The Round a reopen would reopen — the most recently closed one — and
+    the preview of what confirming does. Mirrors the engine's own guards
+    (issue #17) so the refusal lands before anything records, worded for
+    the TO."""
+    if tournament.phase == "completed":
+        if tournament.ended_early:
+            raise CommandError(
+                f"**{tournament.name}** was ended early — its last Round was "
+                "voided rather than closed on results, so there is nothing "
+                "to reopen"
+            )
+        assert tournament.current_round is not None
+        return tournament.current_round, [
+            f"Reopen the final Round ({tournament.current_round}) of "
+            f"**{tournament.name}**? The Tournament is un-completed and the "
+            "posted final Standings stop counting.",
+            "Correct the mistaken result with `/tournament assign-result` in "
+            "its Match thread; the Tournament completes again, with fresh "
+            "final Standings, the moment every result is confirmed.",
+        ]
+    assert tournament.current_round is not None
+    if tournament.current_round == 1:
+        raise CommandError(
+            f"no Round of **{tournament.name}** has closed yet — Round 1 is "
+            "still open, so its results can be corrected directly "
+            "(`/tournament assign-result`)"
+        )
+    pairings = engine.pairings(tournament.tournament_id, tournament.current_round)
+    if any(not m.is_bye and m.status == "confirmed" for m in pairings):
+        raise CommandError(
+            f"Round {tournament.current_round} already has a confirmed "
+            f"result — Round {tournament.current_round - 1} stays closed"
+        )
+    reports = sum(1 for m in pairings if not m.is_bye and m.status != "awaiting_report")
+    discarded = (
+        f", discarding {reports} report{'s' if reports != 1 else ''} already in"
+        if reports
+        else ""
+    )
+    reopened = tournament.current_round - 1
+    return reopened, [
+        f"Reopen Round {reopened} of **{tournament.name}**? Round "
+        f"{tournament.current_round}'s Pairings are reverted as never "
+        f"made{discarded}.",
+        "Correct the mistaken result with `/tournament assign-result` in its "
+        f"Match thread; the Round re-closes and fresh Round "
+        f"{tournament.current_round} Pairings post the moment every result "
+        "is confirmed.",
+    ]
+
+
 def _percent(value: Fraction) -> str:
     return f"{float(value):.1%}"
 
@@ -763,7 +817,7 @@ class PendingResultButton(
 
 
 _TO_CONFIRM_TEMPLATE = (
-    r"multiverse:to-(?P<operation>start|drop|forceclose|end):"
+    r"multiverse:to-(?P<operation>start|drop|forceclose|end|reopen):"
     r"(?P<tournament_id>[^:]+):(?P<argument>[^:]+)"
 )
 
@@ -773,15 +827,15 @@ class TOConfirmButton(
     template=_TO_CONFIRM_TEMPLATE,
 ):
     """The explicit confirmation step in front of a destructive TO operation
-    (ticket #12): a short-schedule start, a Drop, a force-close, an early end.
-    The slash command posts an ephemeral preview of exactly what will happen;
-    only this button fires it.
+    (ticket #12): a short-schedule start, a Drop, a force-close, an early end,
+    a Round reopen. The slash command posts an ephemeral preview of exactly
+    what will happen; only this button fires it.
 
     Like the confirm/Dispute buttons, everything lives in the custom_id so a
     click works across restarts: ``argument`` is the round count (start), the
-    player (drop), or the Round the preview described (forceclose/end) —
-    Round-scoped clicks are refused once the Round has moved on, so the button
-    never acts on a situation the TO did not sign off."""
+    player (drop), or the Round the preview described (forceclose/end/reopen)
+    — Round-scoped clicks are refused once the Round has moved on, so the
+    button never acts on a situation the TO did not sign off."""
 
     def __init__(
         self, operation: str, tournament_id: str, argument: str, label: str = "Confirm"
@@ -816,6 +870,7 @@ class TOConfirmButton(
             "drop": self._drop,
             "forceclose": self._force_close,
             "end": self._end,
+            "reopen": self._reopen,
         }
         try:
             # The preview is ephemeral (invoker-only), but roles can change
@@ -923,6 +978,60 @@ class TOConfirmButton(
             await interaction.followup.send(
                 f"The walk-through is above, but announcing the force-close "
                 f"failed: {error}",
+                ephemeral=True,
+            )
+
+    async def _reopen(
+        self, bot: MultiverseBot, interaction: discord.Interaction
+    ) -> None:
+        """Undo the close the last confirmation triggered so the TO can
+        correct a mistaken result (issue #17). The reverted next Round's
+        threads are forgotten, so the re-close opens fresh ones instead of
+        reusing threads whose Pairings may have changed; the engine re-checks
+        the no-confirmed-results guard, refusing a click that outraced play."""
+        tournament = bot.engine.tournament(self.tournament_id)
+        if tournament.phase not in ("in_progress", "completed"):
+            raise CommandError(f"**{tournament.name}** is not underway")
+        require_current_round(tournament, int(self.argument))
+        completed = tournament.phase == "completed"
+        assert tournament.current_round is not None
+        reverted = (
+            ()
+            if completed
+            else bot.engine.pairings(self.tournament_id, tournament.current_round)
+        )
+        bot.engine.reopen_round(
+            self.tournament_id, reopened_by=str(interaction.user.id)
+        )
+        for match in reverted:
+            bot.bindings_store.delete_match_thread(match.match_id)
+        reopened = bot.engine.tournament(self.tournament_id).current_round
+        await interaction.response.edit_message(
+            content=f"Round {reopened} of **{tournament.name}** is reopened.",
+            view=None,
+        )
+        if completed:
+            announcement = (
+                f"🔓 The TO reopened the final Round of **{tournament.name}** "
+                "to correct a result — the posted final Standings stop "
+                "counting. The Tournament completes again, with fresh final "
+                "Standings, when every result is confirmed."
+            )
+        else:
+            announcement = (
+                f"🔓 The TO reopened Round {reopened} of **{tournament.name}** "
+                f"to correct a result — Round {tournament.current_round}'s "
+                "Pairings and Match threads are void; fresh Pairings post "
+                "when the Round re-closes."
+            )
+        try:
+            channel = await bound_channel(bot, self.tournament_id, "pairings")
+            await channel.send(
+                announcement, allowed_mentions=discord.AllowedMentions.none()
+            )
+        except (CommandError, discord.HTTPException) as error:
+            await interaction.followup.send(
+                f"The Round is reopened, but announcing it failed: {error}",
                 ephemeral=True,
             )
 
@@ -1401,6 +1510,35 @@ def _install_commands(bot: MultiverseBot) -> None:
                 "End the Tournament",
             ),
             ephemeral=True,
+        )
+
+    @tournament_group.command(
+        name="reopen-round",
+        description="Reopen the most recently closed Round to correct a result",
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(tournament="Tournament ID or name; defaults if unique")
+    async def reopen_round(
+        interaction: discord.Interaction, tournament: str | None = None
+    ) -> None:
+        """Preview + confirm: undoes the close (or Tournament completion) the
+        last confirmation triggered, so even the result that closed the Round
+        has a correction window (issue #17; ADR-0001 — an explicit first-class
+        TO action). Refused once the next Round has a confirmed result."""
+        target = resolve_tournament(
+            engine, tournament, _RESULTED, "in progress or completed"
+        )
+        reopened, lines = reopen_preview(engine, target)
+        await interaction.response.send_message(
+            "\n".join(lines),
+            view=to_confirmation(
+                "reopen",
+                target.tournament_id,
+                str(target.current_round),
+                f"Reopen Round {reopened}",
+            ),
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
         )
 
     @bot.tree.command(description="Sign up for a Tournament")

@@ -53,6 +53,25 @@ def test_a_thread_resolves_back_to_its_match(tmp_path: Path) -> None:
     assert store.match_for_thread(777) is None
 
 
+def test_a_deleted_match_thread_is_forgotten(tmp_path: Path) -> None:
+    """Reopening a Round reverts its just-paired next Round (issue #17); the
+    reverted Matches' threads must be forgotten so the re-close opens fresh
+    ones instead of reusing threads whose Pairings may have changed."""
+    db = tmp_path / "tournaments.db"
+    store = BindingsStore(db)
+    store.save_match_thread("T1-R2-M1", 555)
+    store.save_match_thread("T1-R2-M2", 666)
+
+    store.delete_match_thread("T1-R2-M1")
+
+    assert store.match_thread("T1-R2-M1") is None
+    assert store.match_for_thread(555) is None
+    # Other threads — and the deletion itself — survive a restart.
+    reloaded = BindingsStore(db)
+    assert reloaded.match_thread("T1-R2-M1") is None
+    assert reloaded.match_thread("T1-R2-M2") == 666
+
+
 def test_bindings_share_the_database_file_with_the_action_log(
     tmp_path: Path,
 ) -> None:

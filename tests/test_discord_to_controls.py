@@ -20,6 +20,7 @@ from multiverse_bot.bot import (
     CommandError,
     TOConfirmButton,
     open_match_by_reference,
+    reopen_preview,
     require_between_rounds,
     require_current_round,
     result_phrase,
@@ -232,6 +233,92 @@ def test_a_disputed_match_is_flagged_in_the_walk_through() -> None:
     assert "Disputed — <@alice> beat <@bob> 2-1, per <@alice>" in line
 
 
+# -- previewing a reopen ---------------------------------------------------------
+
+
+def test_reopen_preview_offers_the_last_closed_round() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine, players=("alice", "bob", "carol", "dave"))
+    confirm_round(engine, tournament_id, round_number=1)
+
+    reopened, lines = reopen_preview(engine, engine.tournament(tournament_id))
+
+    assert reopened == 1
+    text = "\n".join(lines)
+    # The preview says what reverts (Round 2's Pairings) and what comes next
+    # (correct, then the Round re-closes itself).
+    assert "Round 1" in text and "Round 2" in text
+    assert "assign-result" in text
+
+
+def test_reopen_preview_counts_the_reports_a_revert_discards() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine, players=("alice", "bob", "carol", "dave"))
+    confirm_round(engine, tournament_id, round_number=1)
+    reported = engine.pairings(tournament_id, round_number=2)[0]
+    engine.report_result(
+        tournament_id,
+        reported.match_id,
+        reported_by=reported.player_a,
+        winner=reported.player_a,
+        games_won=2,
+        games_lost=0,
+    )
+
+    _, lines = reopen_preview(engine, engine.tournament(tournament_id))
+
+    assert "1 report" in "\n".join(lines)
+
+
+def test_reopen_preview_refuses_while_no_round_has_closed() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine)
+
+    with pytest.raises(CommandError, match="still open"):
+        reopen_preview(engine, engine.tournament(tournament_id))
+
+
+def test_reopen_preview_refuses_once_the_next_round_has_a_confirmed_result() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine, players=("alice", "bob", "carol", "dave"))
+    confirm_round(engine, tournament_id, round_number=1)
+    underway = engine.pairings(tournament_id, round_number=2)[0]
+    report_and_confirm(
+        engine,
+        tournament_id,
+        underway,
+        winner=underway.player_a,
+        games_won=2,
+        games_lost=0,
+    )
+
+    with pytest.raises(CommandError, match="confirmed"):
+        reopen_preview(engine, engine.tournament(tournament_id))
+
+
+def test_reopen_preview_uncompletes_a_finished_tournament() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine, players=("alice", "bob", "carol", "dave"))
+    confirm_round(engine, tournament_id, round_number=1)
+    confirm_round(engine, tournament_id, round_number=2)
+    assert engine.tournament(tournament_id).phase == "completed"
+
+    reopened, lines = reopen_preview(engine, engine.tournament(tournament_id))
+
+    assert reopened == 2
+    assert "final" in "\n".join(lines)
+
+
+def test_reopen_preview_refuses_an_early_ended_tournament() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_tournament(engine)
+    confirm_round(engine, tournament_id, round_number=1)
+    engine.end_tournament(tournament_id)
+
+    with pytest.raises(CommandError, match="ended early"):
+        reopen_preview(engine, engine.tournament(tournament_id))
+
+
 # -- the confirmation button surviving restarts ---------------------------------
 
 
@@ -242,6 +329,7 @@ def test_a_disputed_match_is_flagged_in_the_walk_through() -> None:
         ("drop", "123456789"),
         ("forceclose", "3"),
         ("end", "3"),
+        ("reopen", "2"),
     ],
 )
 def test_a_confirm_button_round_trips_through_its_custom_id(
