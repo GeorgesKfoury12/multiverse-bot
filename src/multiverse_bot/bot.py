@@ -94,7 +94,7 @@ class MultiverseBot(commands.Bot):
             await self.tree.sync()
 
     async def on_ready(self) -> None:
-        print(f"Logged in as {self.user} (id: {self.user.id})")
+        print(f"Logged in as {self.user} (id: {self.user.id})", flush=True)
 
 
 async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
@@ -365,10 +365,15 @@ def _install_commands(bot: MultiverseBot) -> None:
             message = str(error.original)
         else:
             raise error  # let discord.py log the unexpected traceback
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.NotFound:
+            # The interaction expired before we could answer (e.g. delivered
+            # late after a gateway resume); nobody is listening anymore.
+            pass
 
 
 def _required_env(name: str, hint: str) -> str:
