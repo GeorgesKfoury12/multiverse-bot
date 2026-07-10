@@ -13,16 +13,23 @@ Round, and the frozen Standings at the end. A pairing divergence means the
 seeded pairing changed (regenerate the fixtures if that was intentional); a
 Standings divergence means the engine and the reference disagree on the
 Swiss math — that is the bug this suite exists to catch.
+
+Discrepancy record (issue #13's third acceptance criterion): the fixtures'
+first generation surfaced none — the engine and the reference agreed on both
+Tournaments outright, so there is no bug fix or house-policy difference to
+document beyond ADR-0002 itself.
 """
 
 import json
 from fractions import Fraction
 from pathlib import Path
+from typing import Sequence
 
 import pytest
+from conftest import register_with_deck, report_and_confirm
 
-from golden.reference import PlayedMatch, compute_standings
-from multiverse_bot.engine import TournamentEngine
+from golden.reference import ExpectedStanding, PlayedMatch, compute_standings
+from multiverse_bot.engine import Standing, TournamentEngine
 
 FIXTURE_DIR = Path(__file__).parent / "golden"
 
@@ -49,16 +56,13 @@ def replay(fixture: dict) -> tuple[TournamentEngine, str]:
     tournament_id = engine.create_tournament(name=fixture["name"], game=fixture["game"])
     engine.open_registration(tournament_id)
     for player in fixture["players"]:
-        engine.register_player(tournament_id, player)
-        engine.submit_deck(tournament_id, player, f"{player}'s decklist")
+        register_with_deck(engine, tournament_id, player)
     engine.start_tournament(tournament_id, seed=fixture["seed"])
 
     for round_data in fixture["rounds"]:
         round_number = round_data["round"]
-        seats = [
-            (m.match_id, m.player_a, m.player_b)
-            for m in engine.pairings(tournament_id, round_number)
-        ]
+        paired = {m.match_id: m for m in engine.pairings(tournament_id, round_number)}
+        seats = [(m.match_id, m.player_a, m.player_b) for m in paired.values()]
         assert seats == [
             (m["match_id"], m["player_a"], m["player_b"]) for m in round_data["matches"]
         ], f"round {round_number} pairings diverge from the fixture"
@@ -83,6 +87,8 @@ def replay(fixture: dict) -> tuple[TournamentEngine, str]:
                     games_drawn,
                 )
             elif match["winner"] is None:
+                # Drawn Matches fall outside the conftest helper: nobody won,
+                # so player_a reports and player_b confirms.
                 engine.report_result(
                     tournament_id,
                     match["match_id"],
@@ -96,27 +102,23 @@ def replay(fixture: dict) -> tuple[TournamentEngine, str]:
                     tournament_id, match["match_id"], match["player_b"]
                 )
             else:
-                engine.report_result(
+                report_and_confirm(
+                    engine,
                     tournament_id,
-                    match["match_id"],
-                    match["winner"],
-                    match["winner"],
-                    games_won,
-                    games_lost,
+                    paired[match["match_id"]],
+                    winner=match["winner"],
+                    games_won=games_won,
+                    games_lost=games_lost,
+                    games_drawn=games_drawn,
                 )
-                loser = (
-                    match["player_b"]
-                    if match["winner"] == match["player_a"]
-                    else match["player_a"]
-                )
-                engine.confirm_result(tournament_id, match["match_id"], loser)
 
     return engine, tournament_id
 
 
-def frozen_standings(
-    fixture: dict,
-) -> list[tuple[int, str, int, Fraction, Fraction, Fraction]]:
+Row = tuple[int, str, int, Fraction, Fraction, Fraction]
+
+
+def frozen_standings(fixture: dict) -> list[Row]:
     return [
         (
             row["rank"],
@@ -130,13 +132,18 @@ def frozen_standings(
     ]
 
 
+def rows(standings: Sequence[Standing | ExpectedStanding]) -> list[Row]:
+    """Engine Standing and reference ExpectedStanding rows share this shape."""
+    return [
+        (row.rank, row.player_id, row.match_points, row.omw, row.gw, row.ogw)
+        for row in standings
+    ]
+
+
 def test_replay_reproduces_the_frozen_standings(tournament_fixture: dict) -> None:
     engine, tournament_id = replay(tournament_fixture)
     assert engine.tournament(tournament_id).phase == "completed"
-    assert [
-        (row.rank, row.player_id, row.match_points, row.omw, row.gw, row.ogw)
-        for row in engine.standings(tournament_id)
-    ] == frozen_standings(tournament_fixture)
+    assert rows(engine.standings(tournament_id)) == frozen_standings(tournament_fixture)
 
 
 def test_frozen_standings_match_the_independent_reference(
@@ -150,10 +157,9 @@ def test_frozen_standings_match_the_independent_reference(
         for round_data in tournament_fixture["rounds"]
         for m in round_data["matches"]
     ]
-    assert [
-        (row.rank, row.player_id, row.match_points, row.omw, row.gw, row.ogw)
-        for row in compute_standings(tournament_fixture["players"], matches)
-    ] == frozen_standings(tournament_fixture)
+    assert rows(
+        compute_standings(tournament_fixture["players"], matches)
+    ) == frozen_standings(tournament_fixture)
 
 
 def test_dropped_players_stay_in_the_standings(tournament_fixture: dict) -> None:

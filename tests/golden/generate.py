@@ -25,7 +25,7 @@ from multiverse_bot.engine import TournamentEngine
 TOURNAMENTS = [
     {
         "file": "tournament_1.json",
-        "name": "Multiverse Weekly League I",
+        "name": "Multiverse Weekly I",
         "seed": 4217,
         # Registration order doubles as the scripted strength order.
         "players": [
@@ -57,7 +57,7 @@ TOURNAMENTS = [
     },
     {
         "file": "tournament_2.json",
-        "name": "Multiverse Weekly League II",
+        "name": "Multiverse Weekly II",
         "seed": 90210,
         "players": [
             "morgana",
@@ -87,8 +87,8 @@ TOURNAMENTS = [
 
 def scripted_result(
     round_number: int, index_a: int, index_b: int
-) -> tuple[bool, int, int, int]:
-    """(stronger wins?, games won-lost-drawn) for a Match, deterministically.
+) -> tuple[str, int, int, int]:
+    """("draw"|"stronger"|"weaker", games won-lost-drawn), deterministically.
 
     Strength follows registration order (lower index is stronger), with
     periodic draws, upsets, and a 2-0/2-1 mix so the Tiebreaker math gets
@@ -97,11 +97,11 @@ def scripted_result(
     low, high = sorted((index_a, index_b))
     key = round_number * 37 + low * 7 + high * 13
     if key % 17 == 0:
-        return True, 1, 1, 1  # a drawn Match; the "winner" flag is unused
-    stronger_wins = key % 5 != 0
+        return "draw", 1, 1, 1
+    outcome = "stronger" if key % 5 else "weaker"
     if key % 3 == 0:
-        return stronger_wins, 2, 0, 0
-    return stronger_wins, 2, 1, 0
+        return outcome, 2, 0, 0
+    return outcome, 2, 1, 0
 
 
 def generate(config: dict) -> dict:
@@ -142,33 +142,25 @@ def generate(config: dict) -> dict:
                 continue
             index_a = players.index(match.player_a)
             index_b = players.index(match.player_b)
-            stronger_wins, won, lost, drawn = scripted_result(
-                round_number, index_a, index_b
-            )
-            if drawn and won == lost:
+            outcome, won, lost, drawn = scripted_result(round_number, index_a, index_b)
+            if outcome == "draw":
                 winner = None
-                engine.report_result(
-                    tournament_id,
-                    match.match_id,
-                    match.player_a,
-                    None,
-                    won,
-                    lost,
-                    drawn,
-                )
-                engine.confirm_result(tournament_id, match.match_id, match.player_b)
+                reporter, confirmer = match.player_a, match.player_b
             else:
                 stronger, weaker = (
                     (match.player_a, match.player_b)
                     if index_a < index_b
                     else (match.player_b, match.player_a)
                 )
-                winner = stronger if stronger_wins else weaker
-                engine.report_result(
-                    tournament_id, match.match_id, winner, winner, won, lost
+                winner = stronger if outcome == "stronger" else weaker
+                reporter = winner
+                confirmer = (
+                    match.player_b if winner == match.player_a else match.player_a
                 )
-                loser = match.player_b if winner == match.player_a else match.player_a
-                engine.confirm_result(tournament_id, match.match_id, loser)
+            engine.report_result(
+                tournament_id, match.match_id, reporter, winner, won, lost, drawn
+            )
+            engine.confirm_result(tournament_id, match.match_id, confirmer)
             recorded.append(_record(match, "reported", winner, won, lost, drawn))
         rounds.append(
             {"round": round_number, "drops": list(drops), "matches": recorded}

@@ -59,6 +59,7 @@ def report_and_confirm(
     winner: str,
     games_won: int,
     games_lost: int,
+    games_drawn: int = 0,
 ) -> None:
     """The winner reports, the loser confirms — the shortest confirmed path."""
     engine.report_result(
@@ -68,6 +69,7 @@ def report_and_confirm(
         winner=winner,
         games_won=games_won,
         games_lost=games_lost,
+        games_drawn=games_drawn,
     )
     loser = match.player_b if winner == match.player_a else match.player_a
     assert loser is not None
