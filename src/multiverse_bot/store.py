@@ -141,6 +141,60 @@ class BindingsStore:
         return row[0] if row else None
 
 
+@dataclass(frozen=True)
+class DeckImage:
+    """A screenshot Deck's payload, kept verbatim for the Reveal."""
+
+    filename: str
+    content: bytes
+
+
+class DeckImageStore:
+    """The bytes behind image Decks, next to the action log.
+
+    The engine's Deck string for an image submission is just a marker; the
+    attachment itself is adapter state (Discord CDN links expire, so the bytes
+    must survive until the Reveal). One image per (Tournament, player) —
+    latest wins, like the Deck itself.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self._connection = sqlite3.connect(path)
+        self._connection.execute(
+            "CREATE TABLE IF NOT EXISTS deck_images ("
+            "  tournament_id TEXT NOT NULL,"
+            "  player_id TEXT NOT NULL,"
+            "  filename TEXT NOT NULL,"
+            "  content BLOB NOT NULL,"
+            "  PRIMARY KEY (tournament_id, player_id)"
+            ")"
+        )
+        self._connection.commit()
+
+    def save_image(self, tournament_id: str, player_id: str, image: DeckImage) -> None:
+        self._connection.execute(
+            "INSERT OR REPLACE INTO deck_images VALUES (?, ?, ?, ?)",
+            (tournament_id, player_id, image.filename, image.content),
+        )
+        self._connection.commit()
+
+    def delete_image(self, tournament_id: str, player_id: str) -> None:
+        """Forget the stored image — a text resubmission replaced it."""
+        self._connection.execute(
+            "DELETE FROM deck_images WHERE tournament_id = ? AND player_id = ?",
+            (tournament_id, player_id),
+        )
+        self._connection.commit()
+
+    def image(self, tournament_id: str, player_id: str) -> DeckImage | None:
+        row = self._connection.execute(
+            "SELECT filename, content FROM deck_images"
+            "  WHERE tournament_id = ? AND player_id = ?",
+            (tournament_id, player_id),
+        ).fetchone()
+        return DeckImage(*row) if row else None
+
+
 def open_engine(path: str | Path) -> TournamentEngine:
     """Open (creating if needed) the action log at ``path`` and return an
     engine rebuilt from it; every action taken through the returned engine is

@@ -1,5 +1,5 @@
 """Discord adapter: slash commands and buttons in, engine calls out
-(tickets #9, #10).
+(tickets #9, #10, #11).
 
 Thin by design (spec #1): every command translates one-to-one into an engine
 command or query, TO authorization is one configured Discord role, and the
@@ -11,6 +11,7 @@ Engine player IDs are Discord user IDs as strings, so ``<@id>`` mentions are
 the display form everywhere.
 """
 
+import io
 import os
 import random
 import re
@@ -29,7 +30,13 @@ from multiverse_bot.engine import (
     Tournament,
     TournamentEngine,
 )
-from multiverse_bot.store import BindingsStore, ChannelBindings, open_engine
+from multiverse_bot.store import (
+    BindingsStore,
+    ChannelBindings,
+    DeckImage,
+    DeckImageStore,
+    open_engine,
+)
 
 
 class CommandError(Exception):
@@ -47,6 +54,7 @@ _ACCEPTING_DECKS = ("registration", "registration_closed")
 _STARTABLE = ("registration", "registration_closed")
 _IN_PROGRESS = ("in_progress",)
 _RESULTED = ("in_progress", "completed")
+_HOLDING_DECKS = ("registration", "registration_closed", "in_progress", "completed")
 
 
 def resolve_tournament(
@@ -101,6 +109,69 @@ def format_score(games_won: int, games_lost: int, games_drawn: int) -> str:
     if games_drawn:
         return f"{games_won}-{games_lost}-{games_drawn}"
     return f"{games_won}-{games_lost}"
+
+
+def deck_image_marker(filename: str) -> str:
+    """The engine-side Deck string for an image submission. The bytes live in
+    the ``DeckImageStore``; this marker is what the engine stores, Seals, and
+    Reveals — and what a reader sees if the image itself is ever lost."""
+    return f"[screenshot] {filename}"
+
+
+# Discord's default upload limit is 10 MB; staying under it keeps the Reveal's
+# re-upload from failing in any guild.
+_MAX_DECK_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def validate_deck_attachment(content_type: str | None, size: int) -> None:
+    """Vet a submitted attachment before it becomes the Deck: images only
+    (that is what gets Revealed), small enough for the bot to re-upload."""
+    if content_type is None or not content_type.startswith("image/"):
+        raise CommandError(
+            "that attachment is not an image — send a screenshot of your "
+            "decklist, or submit it as text or a link instead"
+        )
+    if size > _MAX_DECK_IMAGE_BYTES:
+        raise CommandError(
+            "that image is too big to re-post at the Reveal — keep it under "
+            f"{_MAX_DECK_IMAGE_BYTES // (1024 * 1024)} MB"
+        )
+
+
+def resolve_deck_image(deck: str, stored: DeckImage | None) -> DeckImage | None:
+    """The image behind a Deck string, if that is what the string on file
+    refers to. A text Deck ignores any leftover stored image: only the latest
+    submission counts, and the engine's string is the source of truth."""
+    if stored is not None and deck == deck_image_marker(stored.filename):
+        return stored
+    return None
+
+
+def deck_presentation(
+    deck: str, stored: DeckImage | None
+) -> tuple[str, list[discord.File]]:
+    """One Deck as message pieces: an attached screenshot for an image Deck,
+    a quoted block otherwise. The text goes after an attribution line, the
+    files on the same message — the shape every Deck display shares (the
+    submit confirmation, the TO's view, the Reveal)."""
+    image = resolve_deck_image(deck, stored)
+    if image is None:
+        return f"\n>>> {deck}", []
+    return "", [discord.File(io.BytesIO(image.content), filename=image.filename)]
+
+
+def require_decks(engine: TournamentEngine, tournament: Tournament) -> None:
+    """The start gate, rendered for Discord: refuse while Decks are missing,
+    mentioning exactly who — the TO's chase list (spec #1 story 7). The engine
+    enforces the same gate; this puts names on it before the attempt."""
+    missing = engine.players_missing_decks(tournament.tournament_id)
+    if missing:
+        mentions = ", ".join(f"<@{player}>" for player in missing)
+        raise CommandError(
+            f"**{tournament.name}** cannot start — no Deck yet from {mentions}. "
+            "Chase them to `/submit-deck`; the start stays blocked until every "
+            "Deck is in."
+        )
 
 
 def _match_in_round(
@@ -187,6 +258,7 @@ class MultiverseBot(commands.Bot):
         self,
         engine: TournamentEngine,
         bindings_store: BindingsStore,
+        deck_images: DeckImageStore,
         to_role_id: int,
         guild_id: int | None = None,
     ) -> None:
@@ -194,6 +266,7 @@ class MultiverseBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         self.engine = engine
         self.bindings_store = bindings_store
+        self.deck_images = deck_images
         self.to_role_id = to_role_id
         self.guild_id = guild_id
         _install_commands(self)
@@ -298,6 +371,35 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
             "schedule and play your Match here, then report the result."
         )
         bot.bindings_store.save_match_thread(match.match_id, thread.id)
+
+
+async def announce_reveal(bot: MultiverseBot, tournament_id: str) -> None:
+    """Post every Deck at once in the bound decklists channel — the Reveal
+    (spec #1 stories 5, 29). One attributed post per player, no pings; the
+    posts stay up all Tournament (open decklist).
+
+    Safe to re-run (``/tournament post-decklists``) after a crash mid-Reveal,
+    though it posts the full Reveal again rather than patching gaps.
+    """
+    engine = bot.engine
+    tournament = engine.tournament(tournament_id)
+    channel = await bound_channel(bot, tournament_id, "decklists")
+    await channel.send(
+        f"## {tournament.name} — Deck Reveal\n"
+        "Sealed no more: every player's Deck, all at once. Lists are locked "
+        "for the whole Tournament — study away."
+    )
+    for player_id in tournament.players:
+        # Post-start every Deck is public; the owner query works in any phase.
+        deck = engine.deck(tournament_id, player_id, requested_by=player_id)
+        suffix, files = deck_presentation(
+            deck, bot.deck_images.image(tournament_id, player_id)
+        )
+        await channel.send(
+            f"**<@{player_id}>'s Deck**{suffix}",
+            files=files,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
 
 
 async def announce_result(
@@ -610,17 +712,21 @@ def _install_commands(bot: MultiverseBot) -> None:
         rounds: app_commands.Range[int, 1] | None = None,
     ) -> None:
         target = resolve_tournament(engine, tournament, _STARTABLE, "ready to start")
-        # Opening a thread per Match is a Discord round-trip each; buy time.
+        # The friendly face of the engine's own gate: refuse with mentions,
+        # before deferring, so the TO gets their chase list ephemerally.
+        require_decks(engine, target)
+        # The Reveal and a thread per Match are a Discord round-trip each.
         await interaction.response.defer()
         warning = engine.start_tournament(
             target.tournament_id, seed=random.randrange(2**63), round_count=rounds
         )
+        await announce_reveal(bot, target.tournament_id)
         await announce_pairings(bot, target.tournament_id)
         started = engine.tournament(target.tournament_id)
         lines = [
             f"**{target.name}** ({target.tournament_id}) has started: "
             f"{len(started.players)} players, {started.round_count} Rounds. "
-            "Round 1 Pairings are up!"
+            "Decks are Revealed and Round 1 Pairings are up!"
         ]
         if warning is not None:
             lines.append(f"⚠️ {warning}")
@@ -668,6 +774,61 @@ def _install_commands(bot: MultiverseBot) -> None:
             f"Standings for **{target.name}** are re-posted."
         )
 
+    @tournament_group.command(
+        name="view-deck",
+        description="View a player's Deck, Sealed or Revealed (TO only)",
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(
+        player="Whose Deck to view",
+        tournament="Tournament ID or name; defaults if unique",
+    )
+    async def view_deck(
+        interaction: discord.Interaction,
+        player: discord.Member,
+        tournament: str | None = None,
+    ) -> None:
+        """Ephemeral, so checking a Sealed Deck in a public channel does not
+        Reveal it."""
+        target = resolve_tournament(engine, tournament, _HOLDING_DECKS, "underway")
+        try:
+            deck = engine.deck_as_to(target.tournament_id, str(player.id))
+        except EngineError:
+            # The tournament resolved above, so the only refusal left is a
+            # missing Deck; say it with a mention, not a raw ID.
+            raise CommandError(
+                f"{player.mention} has no Deck on file in **{target.name}**"
+            ) from None
+        suffix, files = deck_presentation(
+            deck, bot.deck_images.image(target.tournament_id, str(player.id))
+        )
+        await interaction.response.send_message(
+            f"{player.mention}'s Deck in **{target.name}**:{suffix}",
+            files=files,
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    @tournament_group.command(
+        name="post-decklists",
+        description="Re-post the Deck Reveal (recovery)",
+    )
+    @app_commands.check(is_to)
+    @app_commands.describe(tournament="Tournament ID or name; defaults if unique")
+    async def post_decklists(
+        interaction: discord.Interaction, tournament: str | None = None
+    ) -> None:
+        """Recovery for a crash between the start and the Reveal finishing:
+        posts the whole Reveal again."""
+        target = resolve_tournament(
+            engine, tournament, _RESULTED, "in progress or completed"
+        )
+        await interaction.response.defer()
+        await announce_reveal(bot, target.tournament_id)
+        await interaction.followup.send(
+            f"The Deck Reveal for **{target.name}** is re-posted."
+        )
+
     @bot.tree.command(description="Sign up for a Tournament")
     @app_commands.guild_only()
     @app_commands.describe(tournament="Tournament ID or name; defaults if unique")
@@ -691,22 +852,64 @@ def _install_commands(bot: MultiverseBot) -> None:
     )
     @app_commands.guild_only()
     @app_commands.describe(
-        deck="Your decklist: text or a deckbuilder link",
+        image="A screenshot of your decklist (preferred)",
+        deck="Your decklist as text, or a deckbuilder link",
         tournament="Tournament ID or name; defaults if unique",
     )
     async def submit_deck(
-        interaction: discord.Interaction, deck: str, tournament: str | None = None
+        interaction: discord.Interaction,
+        image: discord.Attachment | None = None,
+        deck: str | None = None,
+        tournament: str | None = None,
     ) -> None:
+        """Ephemeral end to end: neither the submission nor the confirmation
+        leaves a channel-history trace, so a Sealed Deck is truly Sealed
+        (spec #1 stories 2, 3). The confirmation echoes what is now on file."""
         target = resolve_tournament(
             engine, tournament, _ACCEPTING_DECKS, "accepting Decks"
         )
-        engine.submit_deck(target.tournament_id, str(interaction.user.id), deck)
-        # Ephemeral: a Sealed submission leaves no channel-history trace.
-        await interaction.response.send_message(
-            f"Deck locked in for **{target.name}**, Sealed until the start. "
-            f"On file:\n>>> {deck}",
-            ephemeral=True,
+        if (deck is None) == (image is None):
+            raise CommandError(
+                "submit your decklist in exactly one form: a screenshot "
+                "`image` (preferred), or `deck` text / a deckbuilder link"
+            )
+        tournament_id = target.tournament_id
+        player_id = str(interaction.user.id)
+        if image is not None:
+            validate_deck_attachment(image.content_type, image.size)
+            # Downloading the screenshot can outlast the 3s interaction window.
+            await interaction.response.defer(ephemeral=True)
+            try:
+                content = await image.read()
+            except discord.HTTPException as error:
+                raise CommandError(
+                    "could not download that image from Discord; try again"
+                ) from error
+            engine.submit_deck(
+                tournament_id, player_id, deck_image_marker(image.filename)
+            )
+            bot.deck_images.save_image(
+                tournament_id, player_id, DeckImage(image.filename, content)
+            )
+        else:
+            assert deck is not None
+            engine.submit_deck(tournament_id, player_id, deck)
+            # A text Deck replaces an image one; drop the stale bytes.
+            bot.deck_images.delete_image(tournament_id, player_id)
+        on_file = engine.deck(tournament_id, player_id, requested_by=player_id)
+        suffix, files = deck_presentation(
+            on_file, bot.deck_images.image(tournament_id, player_id)
         )
+        message = (
+            f"Deck locked in for **{target.name}**, Sealed until the start. "
+            f"On file:{suffix}"
+        )
+        if interaction.response.is_done():
+            await interaction.followup.send(message, files=files, ephemeral=True)
+        else:
+            await interaction.response.send_message(
+                message, files=files, ephemeral=True
+            )
 
     @bot.tree.command(description="Report your Match result from its Match thread")
     @app_commands.guild_only()
@@ -819,6 +1022,7 @@ def run() -> None:
     bot = MultiverseBot(
         engine=open_engine(db_path),
         bindings_store=BindingsStore(db_path),
+        deck_images=DeckImageStore(db_path),
         to_role_id=to_role_id,
         guild_id=int(guild_id) if guild_id else None,
     )
