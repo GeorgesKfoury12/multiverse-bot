@@ -86,21 +86,32 @@ def test_an_image_deck_with_no_stored_bytes_resolves_to_nothing() -> None:
 
 
 def test_a_reasonable_screenshot_passes_validation() -> None:
-    validate_deck_attachment(content_type="image/png", size=2 * 1024 * 1024)
-    validate_deck_attachment(content_type="image/jpeg", size=1)
+    validate_deck_attachment("image/png", "deck.png", size=2 * 1024 * 1024)
+    validate_deck_attachment("image/jpeg", "deck.jpg", size=1)
 
 
-@pytest.mark.parametrize("content_type", [None, "application/pdf", "text/plain"])
-def test_a_non_image_attachment_is_refused(content_type: str | None) -> None:
+def test_a_screenshot_without_a_content_type_passes_by_extension() -> None:
+    """Discord sometimes omits the content type; a real screenshot must not
+    bounce for it."""
+    validate_deck_attachment(None, "deck.PNG", size=1024)
+
+
+@pytest.mark.parametrize(
+    ("content_type", "filename"),
+    [("application/pdf", "deck.pdf"), ("text/plain", "deck.txt"), (None, "deck.pdf")],
+)
+def test_a_non_image_attachment_is_refused(
+    content_type: str | None, filename: str
+) -> None:
     with pytest.raises(CommandError, match="image"):
-        validate_deck_attachment(content_type=content_type, size=1024)
+        validate_deck_attachment(content_type, filename, size=1024)
 
 
 def test_an_image_too_big_to_repost_is_refused() -> None:
     """The bot re-uploads the image at the Reveal, so anything past Discord's
     default upload limit would seal a Deck that can never be Revealed."""
     with pytest.raises(CommandError, match="8"):
-        validate_deck_attachment(content_type="image/png", size=9 * 1024 * 1024)
+        validate_deck_attachment("image/png", "deck.png", size=9 * 1024 * 1024)
 
 
 # -- the start gate, in mentions ------------------------------------------------
