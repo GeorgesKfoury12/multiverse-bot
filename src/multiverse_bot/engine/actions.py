@@ -37,7 +37,7 @@ class ResultSubmitted:
 
 
 @dataclass(frozen=True)
-class TournamentClosed:
+class TournamentEnded:
     """The TO ends the Tournament early; Standings-so-far become final."""
 
     tournament_id: str
@@ -48,5 +48,5 @@ Action = (
     | PlayerRegistered
     | TournamentStarted
     | ResultSubmitted
-    | TournamentClosed
+    | TournamentEnded
 )

@@ -179,7 +179,49 @@ def test_concurrent_tournaments_are_independent() -> None:
     assert {row.match_points for row in engine.standings(running_id)} == {0, 3}
 
 
-def test_close_ends_the_tournament_with_standings_so_far() -> None:
+def test_start_rejects_odd_player_counts_until_byes_exist() -> None:
+    engine = TournamentEngine()
+    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    for player_id in PLAYERS[:3]:
+        engine.register_player(tournament_id, player_id)
+
+    with pytest.raises(EngineError):
+        engine.start_tournament(tournament_id, seed=42)
+
+
+def test_pairings_show_results_as_they_come_in() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    first, second = engine.pairings(tournament_id, round_number=1)
+    assert first.winner is None and second.winner is None
+
+    engine.submit_result(
+        tournament_id, first.match_id, winner=first.player_b, games_won=2, games_lost=1
+    )
+
+    first, second = engine.pairings(tournament_id, round_number=1)
+    assert first.winner == first.player_b
+    assert (first.games_won, first.games_lost) == (2, 1)
+    assert second.winner is None
+
+
+def test_submit_result_rejects_a_score_the_winner_did_not_win() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    match = engine.pairings(tournament_id, round_number=1)[0]
+
+    for games_won, games_lost in ((1, 2), (1, 1), (-2, 0)):
+        with pytest.raises(EngineError):
+            engine.submit_result(
+                tournament_id,
+                match.match_id,
+                winner=match.player_a,
+                games_won=games_won,
+                games_lost=games_lost,
+            )
+
+
+def test_ending_early_freezes_standings_so_far() -> None:
     engine = TournamentEngine()
     tournament_id = start_four_player_tournament(engine)
     first, second = engine.pairings(tournament_id, round_number=1)
@@ -187,7 +229,7 @@ def test_close_ends_the_tournament_with_standings_so_far() -> None:
         tournament_id, first.match_id, winner=first.player_a, games_won=2, games_lost=0
     )
 
-    engine.close_tournament(tournament_id)
+    engine.end_tournament(tournament_id)
 
     assert engine.tournament(tournament_id).phase == "completed"
     assert [row.match_points for row in engine.standings(tournament_id)] == [3, 0, 0, 0]

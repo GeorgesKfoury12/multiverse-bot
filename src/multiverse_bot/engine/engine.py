@@ -8,14 +8,14 @@ seed recorded in the history, never from ambient entropy.
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from multiverse_bot.engine.actions import (
     Action,
     PlayerRegistered,
     ResultSubmitted,
-    TournamentClosed,
     TournamentCreated,
+    TournamentEnded,
     TournamentStarted,
 )
 
@@ -41,12 +41,15 @@ class Tournament:
 
 @dataclass(frozen=True)
 class Match:
-    """One Match of a Round's Pairings."""
+    """One Match of a Round's Pairings; result fields are None until submitted."""
 
     match_id: str
     round_number: int
     player_a: str
     player_b: str
+    winner: str | None = None
+    games_won: int | None = None
+    games_lost: int | None = None
 
 
 @dataclass(frozen=True)
@@ -69,7 +72,7 @@ class _TournamentState:
     current_round: int | None = None
     rounds: dict[int, list[Match]] = field(default_factory=dict)
     matches_by_id: dict[str, Match] = field(default_factory=dict)
-    winners_by_match: dict[str, str] = field(default_factory=dict)
+    results_by_match: dict[str, tuple[str, int, int]] = field(default_factory=dict)
     match_points: dict[str, int] = field(default_factory=dict)
     opponents: dict[str, set[str]] = field(default_factory=dict)
 
@@ -114,6 +117,11 @@ class TournamentEngine:
             raise EngineError(f"{tournament_id} has already started")
         if len(tournament.players) < 2:
             raise EngineError(f"{tournament_id} needs at least 2 players to start")
+        if len(tournament.players) % 2:
+            raise EngineError(
+                f"{tournament_id} has an odd player count "
+                f"({len(tournament.players)}); Byes are not supported yet"
+            )
         self._record(TournamentStarted(tournament_id, seed))
 
     def submit_result(
@@ -136,17 +144,21 @@ class TournamentEngine:
             )
         if winner not in (match.player_a, match.player_b):
             raise EngineError(f"{winner} is not playing in {match_id}")
-        if match_id in tournament.winners_by_match:
+        if match_id in tournament.results_by_match:
             raise EngineError(f"{match_id} already has a result")
+        if games_lost < 0 or games_won <= games_lost:
+            raise EngineError(
+                f"{games_won}-{games_lost} is not a winning score for {winner}"
+            )
         self._record(
             ResultSubmitted(tournament_id, match_id, winner, games_won, games_lost)
         )
 
-    def close_tournament(self, tournament_id: str) -> None:
+    def end_tournament(self, tournament_id: str) -> None:
         tournament = self._tournament_state(tournament_id)
         if tournament.phase != "in_progress":
             raise EngineError(f"{tournament_id} is not in progress")
-        self._record(TournamentClosed(tournament_id))
+        self._record(TournamentEnded(tournament_id))
 
     # -- queries -----------------------------------------------------------
 
@@ -165,7 +177,9 @@ class TournamentEngine:
         state = self._tournament_state(tournament_id)
         if round_number not in state.rounds:
             raise EngineError(f"{tournament_id} has no round {round_number}")
-        return tuple(state.rounds[round_number])
+        return tuple(
+            self._with_result(state, match) for match in state.rounds[round_number]
+        )
 
     def standings(self, tournament_id: str) -> tuple[Standing, ...]:
         state = self._tournament_state(tournament_id)
@@ -211,19 +225,23 @@ class TournamentEngine:
                 state.opponents = {player: set() for player in state.players}
                 self._begin_round(state, 1)
             case ResultSubmitted(
-                tournament_id=tournament_id, match_id=match_id, winner=winner
+                tournament_id=tournament_id,
+                match_id=match_id,
+                winner=winner,
+                games_won=games_won,
+                games_lost=games_lost,
             ):
                 state = self._tournaments[tournament_id]
-                state.winners_by_match[match_id] = winner
+                state.results_by_match[match_id] = (winner, games_won, games_lost)
                 state.match_points[winner] += _MATCH_POINTS_PER_WIN
                 self._advance_if_round_complete(state)
-            case TournamentClosed(tournament_id=tournament_id):
+            case TournamentEnded(tournament_id=tournament_id):
                 self._tournaments[tournament_id].phase = "completed"
 
     def _advance_if_round_complete(self, state: _TournamentState) -> None:
         assert state.current_round is not None and state.round_count is not None
         current_matches = state.rounds[state.current_round]
-        if any(m.match_id not in state.winners_by_match for m in current_matches):
+        if any(m.match_id not in state.results_by_match for m in current_matches):
             return
         if state.current_round == state.round_count:
             state.phase = "completed"
@@ -265,6 +283,14 @@ class TournamentEngine:
             state.matches_by_id[match.match_id] = match
             state.opponents[match.player_a].add(match.player_b)
             state.opponents[match.player_b].add(match.player_a)
+
+    @staticmethod
+    def _with_result(state: _TournamentState, match: Match) -> Match:
+        result = state.results_by_match.get(match.match_id)
+        if result is None:
+            return match
+        winner, games_won, games_lost = result
+        return replace(match, winner=winner, games_won=games_won, games_lost=games_lost)
 
     def _tournament_state(self, tournament_id: str) -> _TournamentState:
         try:
