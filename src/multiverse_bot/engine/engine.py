@@ -6,9 +6,9 @@ a fresh engine reproduces identical state. Pairing randomness comes from the
 seed recorded in the history, never from ambient entropy.
 """
 
-import math
 import random
 from dataclasses import dataclass, field, replace
+from fractions import Fraction
 
 from multiverse_bot.engine.actions import (
     Action,
@@ -19,10 +19,12 @@ from multiverse_bot.engine.actions import (
     TournamentStarted,
 )
 from multiverse_bot.engine.pairing import pair_round
-
-# House defaults per ADR-0002; lifted into per-Game ruleset config by a later ticket.
-_MATCH_POINTS_PER_WIN = 3
-_BYE_GAME_SCORE = (2, 0)
+from multiverse_bot.engine.ruleset import RULESETS, Ruleset
+from multiverse_bot.engine.tiebreakers import (
+    MatchRecord,
+    Tiebreakers,
+    compute_tiebreakers,
+)
 
 
 class EngineError(Exception):
@@ -46,8 +48,8 @@ class Match:
     """One Match of a Round's Pairings; result fields are None until submitted.
 
     A Bye is a Match with no opponent (``player_b is None``): it comes
-    pre-scored as a 2-0 win for ``player_a`` and stays marked so Tiebreaker
-    exclusion can find it later.
+    pre-scored as a win for ``player_a`` at the ruleset's Bye game score and
+    stays marked so Tiebreaker exclusion can find it later.
     """
 
     match_id: str
@@ -65,17 +67,26 @@ class Match:
 
 @dataclass(frozen=True)
 class Standing:
-    """One row of a Tournament's Standings; tied players share a rank."""
+    """One row of a Tournament's Standings.
+
+    Ordered by Match Points, then the Tiebreaker stack OMW% -> GW% -> OGW%
+    (exact Fractions in [0, 1]); players tied through the whole stack share
+    a rank.
+    """
 
     rank: int
     player_id: str
     match_points: int
+    omw: Fraction
+    gw: Fraction
+    ogw: Fraction
 
 
 @dataclass
 class _TournamentState:
     tournament_id: str
     name: str
+    ruleset: Ruleset
     phase: str = "registration"
     players: list[str] = field(default_factory=list)
     seed: int | None = None
@@ -110,9 +121,11 @@ class TournamentEngine:
 
     # -- commands ----------------------------------------------------------
 
-    def create_tournament(self, name: str) -> str:
+    def create_tournament(self, name: str, game: str = "riftbound") -> str:
+        if game not in RULESETS:
+            raise EngineError(f"no ruleset configured for game: {game}")
         tournament_id = f"T{self._created_count + 1}"
-        self._record(TournamentCreated(tournament_id, name))
+        self._record(TournamentCreated(tournament_id, name, game))
         return tournament_id
 
     def register_player(self, tournament_id: str, player_id: str) -> None:
@@ -192,20 +205,39 @@ class TournamentEngine:
         state = self._tournament_state(tournament_id)
         if state.phase == "registration":
             raise EngineError(f"{tournament_id} has not started; no standings yet")
+        tiebreakers = self._tiebreakers(state)
+
+        def stack(player: str) -> tuple[int, Fraction, Fraction, Fraction]:
+            t = tiebreakers[player]
+            return (state.match_points[player], t.omw, t.gw, t.ogw)
+
         registration_order = {player: i for i, player in enumerate(state.players)}
         ordered = sorted(
             state.players,
-            key=lambda p: (-state.match_points[p], registration_order[p]),
+            key=lambda p: (
+                *(-value for value in stack(p)),
+                registration_order[p],
+            ),
         )
         rows = []
+        previous_stack = None
         for position, player in enumerate(ordered, start=1):
-            points = state.match_points[player]
-            # Standard competition ranking: tied players share the rank.
-            if rows and rows[-1].match_points == points:
-                rank = rows[-1].rank
-            else:
-                rank = position
-            rows.append(Standing(rank=rank, player_id=player, match_points=points))
+            current = stack(player)
+            points, omw, gw, ogw = current
+            # Standard competition ranking: players tied through the whole
+            # stack share the rank.
+            rank = rows[-1].rank if current == previous_stack else position
+            previous_stack = current
+            rows.append(
+                Standing(
+                    rank=rank,
+                    player_id=player,
+                    match_points=points,
+                    omw=omw,
+                    gw=gw,
+                    ogw=ogw,
+                )
+            )
         return tuple(rows)
 
     # -- history -----------------------------------------------------------
@@ -216,9 +248,9 @@ class TournamentEngine:
 
     def _apply(self, action: Action) -> None:
         match action:
-            case TournamentCreated(tournament_id=tournament_id, name=name):
+            case TournamentCreated(tournament_id=tournament_id, name=name, game=game):
                 self._tournaments[tournament_id] = _TournamentState(
-                    tournament_id=tournament_id, name=name
+                    tournament_id=tournament_id, name=name, ruleset=RULESETS[game]
                 )
                 self._created_count += 1
             case PlayerRegistered(tournament_id=tournament_id, player_id=player_id):
@@ -227,7 +259,7 @@ class TournamentEngine:
                 state = self._tournaments[tournament_id]
                 state.phase = "in_progress"
                 state.seed = seed
-                state.round_count = math.ceil(math.log2(len(state.players)))
+                state.round_count = state.ruleset.swiss_round_count(len(state.players))
                 state.match_points = {player: 0 for player in state.players}
                 state.opponents = {player: set() for player in state.players}
                 self._begin_round(state, 1)
@@ -240,7 +272,11 @@ class TournamentEngine:
             ):
                 state = self._tournaments[tournament_id]
                 state.results_by_match[match_id] = (winner, games_won, games_lost)
-                state.match_points[winner] += _MATCH_POINTS_PER_WIN
+                match = state.matches_by_id[match_id]
+                loser = match.player_b if winner == match.player_a else match.player_a
+                assert loser is not None
+                state.match_points[winner] += state.ruleset.match_points_win
+                state.match_points[loser] += state.ruleset.match_points_loss
                 self._advance_if_round_complete(state)
             case TournamentEnded(tournament_id=tournament_id):
                 self._tournaments[tournament_id].phase = "completed"
@@ -297,16 +333,49 @@ class TournamentEngine:
         for match in matches:
             state.matches_by_id[match.match_id] = match
             if match.is_bye:
-                # A Bye scores as a 2-0 win immediately; it never blocks the Round.
+                # A Bye scores as a win immediately; it never blocks the Round.
                 state.results_by_match[match.match_id] = (
                     match.player_a,
-                    *_BYE_GAME_SCORE,
+                    *state.ruleset.bye_game_score,
                 )
-                state.match_points[match.player_a] += _MATCH_POINTS_PER_WIN
+                state.match_points[match.player_a] += state.ruleset.match_points_win
                 state.byes.add(match.player_a)
             else:
                 state.opponents[match.player_a].add(match.player_b)
                 state.opponents[match.player_b].add(match.player_a)
+
+    @staticmethod
+    def _tiebreakers(state: _TournamentState) -> dict[str, Tiebreakers]:
+        # Only completed two-player Matches feed the Tiebreakers: Byes are
+        # excluded per ADR-0002, unreported Matches have nothing to count.
+        ruleset = state.ruleset
+        records: dict[str, list[MatchRecord]] = {player: [] for player in state.players}
+        for match_id, (winner, games_won, games_lost) in state.results_by_match.items():
+            match = state.matches_by_id[match_id]
+            if match.is_bye:
+                continue
+            assert match.player_b is not None
+            games_played = games_won + games_lost
+            for player, opponent in (
+                (match.player_a, match.player_b),
+                (match.player_b, match.player_a),
+            ):
+                won = player == winner
+                records[player].append(
+                    MatchRecord(
+                        opponent=opponent,
+                        match_points=ruleset.match_points_win
+                        if won
+                        else ruleset.match_points_loss,
+                        games_won=games_won if won else games_lost,
+                        games_played=games_played,
+                    )
+                )
+        return compute_tiebreakers(
+            records,
+            match_points_win=ruleset.match_points_win,
+            floor=ruleset.tiebreaker_floor,
+        )
 
     @staticmethod
     def _with_result(state: _TournamentState, match: Match) -> Match:

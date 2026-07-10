@@ -11,8 +11,11 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class TournamentCreated:
+    """Names the Game so replay resolves the same ruleset from ``RULESETS``."""
+
     tournament_id: str
     name: str
+    game: str
 
 
 @dataclass(frozen=True)
