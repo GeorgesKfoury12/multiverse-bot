@@ -3,8 +3,9 @@
 
 Thin by design (spec #1): every command translates one-to-one into an engine
 command or query, TO authorization is one configured Discord role, and the
-adapter's only own state is the persisted channel wiring. Restarting the bot
-is therefore just ``open_engine`` plus reading that wiring back — the
+adapter's only own state is persisted Discord wiring — channel bindings,
+Match threads, and the bytes behind image Decks. Restarting the bot is
+therefore just ``open_engine`` plus reading that wiring back — the
 confirm/Dispute buttons are stateless too, resolved from their custom_id.
 
 Engine player IDs are Discord user IDs as strings, so ``<@id>`` mentions are
@@ -122,11 +123,21 @@ def deck_image_marker(filename: str) -> str:
 # re-upload from failing in any guild.
 _MAX_DECK_IMAGE_BYTES = 8 * 1024 * 1024
 
+_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
-def validate_deck_attachment(content_type: str | None, size: int) -> None:
+
+def validate_deck_attachment(
+    content_type: str | None, filename: str, size: int
+) -> None:
     """Vet a submitted attachment before it becomes the Deck: images only
-    (that is what gets Revealed), small enough for the bot to re-upload."""
-    if content_type is None or not content_type.startswith("image/"):
+    (that is what gets Revealed), small enough for the bot to re-upload.
+    Discord sometimes omits the content type, so the extension backs it up."""
+    is_image = (
+        content_type.startswith("image/")
+        if content_type is not None
+        else filename.lower().endswith(_IMAGE_EXTENSIONS)
+    )
+    if not is_image:
         raise CommandError(
             "that attachment is not an image — send a screenshot of your "
             "decklist, or submit it as text or a link instead"
@@ -286,6 +297,13 @@ class MultiverseBot(commands.Bot):
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (id: {self.user.id})", flush=True)
 
+    def presented_deck(
+        self, tournament_id: str, player_id: str, deck: str
+    ) -> tuple[str, list[discord.File]]:
+        """``deck_presentation`` with the player's stored image looked up —
+        the pair always travels together."""
+        return deck_presentation(deck, self.deck_images.image(tournament_id, player_id))
+
 
 async def bound_channel(
     bot: MultiverseBot, tournament_id: str, purpose: str
@@ -392,9 +410,7 @@ async def announce_reveal(bot: MultiverseBot, tournament_id: str) -> None:
     for player_id in tournament.players:
         # Post-start every Deck is public; the owner query works in any phase.
         deck = engine.deck(tournament_id, player_id, requested_by=player_id)
-        suffix, files = deck_presentation(
-            deck, bot.deck_images.image(tournament_id, player_id)
-        )
+        suffix, files = bot.presented_deck(tournament_id, player_id, deck)
         await channel.send(
             f"**<@{player_id}>'s Deck**{suffix}",
             files=files,
@@ -799,9 +815,7 @@ def _install_commands(bot: MultiverseBot) -> None:
             raise CommandError(
                 f"{player.mention} has no Deck on file in **{target.name}**"
             ) from None
-        suffix, files = deck_presentation(
-            deck, bot.deck_images.image(target.tournament_id, str(player.id))
-        )
+        suffix, files = bot.presented_deck(target.tournament_id, str(player.id), deck)
         await interaction.response.send_message(
             f"{player.mention}'s Deck in **{target.name}**:{suffix}",
             files=files,
@@ -859,7 +873,10 @@ def _install_commands(bot: MultiverseBot) -> None:
     async def submit_deck(
         interaction: discord.Interaction,
         image: discord.Attachment | None = None,
-        deck: str | None = None,
+        # Capped so the Reveal post (attribution line + quoted Deck) always
+        # fits Discord's 2000-character message limit — Decks are immutable
+        # once Revealed, so an unpostable one could never be fixed.
+        deck: app_commands.Range[str, 1, 1500] | None = None,
         tournament: str | None = None,
     ) -> None:
         """Ephemeral end to end: neither the submission nor the confirmation
@@ -876,7 +893,7 @@ def _install_commands(bot: MultiverseBot) -> None:
         tournament_id = target.tournament_id
         player_id = str(interaction.user.id)
         if image is not None:
-            validate_deck_attachment(image.content_type, image.size)
+            validate_deck_attachment(image.content_type, image.filename, image.size)
             # Downloading the screenshot can outlast the 3s interaction window.
             await interaction.response.defer(ephemeral=True)
             try:
@@ -897,9 +914,7 @@ def _install_commands(bot: MultiverseBot) -> None:
             # A text Deck replaces an image one; drop the stale bytes.
             bot.deck_images.delete_image(tournament_id, player_id)
         on_file = engine.deck(tournament_id, player_id, requested_by=player_id)
-        suffix, files = deck_presentation(
-            on_file, bot.deck_images.image(tournament_id, player_id)
-        )
+        suffix, files = bot.presented_deck(tournament_id, player_id, on_file)
         message = (
             f"Deck locked in for **{target.name}**, Sealed until the start. "
             f"On file:{suffix}"
