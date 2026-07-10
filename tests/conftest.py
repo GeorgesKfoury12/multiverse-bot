@@ -5,13 +5,21 @@ from multiverse_bot.engine import Match, TournamentEngine
 PLAYERS = ("alice", "bob", "carol", "dave")
 
 
+def register_with_deck(
+    engine: TournamentEngine, tournament_id: str, player_id: str
+) -> None:
+    """Register and submit a placeholder Deck, keeping the start gate open."""
+    engine.register_player(tournament_id, player_id)
+    engine.submit_deck(tournament_id, player_id, f"{player_id}'s decklist")
+
+
 def create_tournament_with_players(
     engine: TournamentEngine, players: tuple[str, ...] = PLAYERS
 ) -> str:
     """Create and register only, leaving the start (and its options) to the test."""
     tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
     for player_id in players:
-        engine.register_player(tournament_id, player_id)
+        register_with_deck(engine, tournament_id, player_id)
     return tournament_id
 
 

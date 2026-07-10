@@ -25,6 +25,17 @@ class PlayerRegistered:
 
 
 @dataclass(frozen=True)
+class DeckSubmitted:
+    """A player locks in their Deck for the Tournament, replacing any earlier
+    submission — only the latest counts. ``deck`` is opaque (an image
+    reference, text list, or link), stored and Revealed verbatim, unparsed."""
+
+    tournament_id: str
+    player_id: str
+    deck: str
+
+
+@dataclass(frozen=True)
 class TournamentStarted:
     """``round_count`` is the TO's override; None means the ruleset's standard
     Swiss count for the player count."""
@@ -107,6 +118,7 @@ class TournamentEnded:
 Action = (
     TournamentCreated
     | PlayerRegistered
+    | DeckSubmitted
     | TournamentStarted
     | ResultReported
     | ResultConfirmed
