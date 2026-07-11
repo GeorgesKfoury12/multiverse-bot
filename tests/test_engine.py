@@ -12,9 +12,11 @@ import sys
 import pytest
 from conftest import (
     PLAYERS,
+    confirm_round,
     create_tournament_with_players,
     register_with_deck,
     report_and_confirm,
+    report_last_pairable_round,
     start_four_player_tournament,
 )
 
@@ -393,68 +395,90 @@ def test_ending_early_freezes_standings_so_far() -> None:
         )
 
 
-def test_a_close_that_cannot_pair_the_next_round_leaves_the_engine_untouched() -> None:
-    """When the confirmation closing a Round finds no rematch-free pairing for
-    the next one, the pairing error surfaces and the engine stays exactly as
-    it was (issue #36): the Round stays open, the confirm does not take, and
-    every query and retry keeps working instead of "has no round N"."""
+def test_a_close_that_cannot_pair_the_next_round_completes_the_tournament() -> None:
+    """When Drops leave no rematch-free pairing for the next scheduled Round,
+    the confirmation that closes the current one completes the Tournament with
+    Standings-so-far final — end-early semantics, but automatic (issue #37).
+    The snapshot names the Round that could not be paired so callers can
+    announce why the schedule was cut short."""
     engine = TournamentEngine()
-    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
-    engine.open_registration(tournament_id)
-    for player_id in PLAYERS[:3]:
-        register_with_deck(engine, tournament_id, player_id)
-    engine.start_tournament(tournament_id, seed=42, round_count=3)
+    tournament_id, last_pairable = report_last_pairable_round(engine)
 
-    round_one = engine.pairings(tournament_id, round_number=1)
-    (played,) = [m for m in round_one if not m.is_bye]
-    # The Round 1 loser drops, so Round 2 pairs the winner against the Round 1
-    # Bye — leaving Round 3 only two players who have already met.
-    engine.drop_player(tournament_id, played.player_b, dropped_by=played.player_b)
-    report_and_confirm(
-        engine, tournament_id, played, winner=played.player_a, games_won=2, games_lost=0
+    engine.confirm_result(
+        tournament_id, last_pairable.match_id, confirmed_by=last_pairable.player_b
     )
 
-    (last_pairable,) = engine.pairings(tournament_id, round_number=2)
-    engine.report_result(
+    tournament = engine.tournament(tournament_id)
+    assert tournament.phase == "completed"
+    assert not tournament.ended_early
+    assert tournament.current_round == 2
+    assert tournament.unpairable_round == 3
+    # Standings-so-far are final: the double winner leads on 6 points.
+    leader = engine.standings(tournament_id)[0]
+    assert leader.player_id == last_pairable.player_a
+    assert leader.match_points == 6
+    # A normal completion carries no unpairable Round.
+    replayed = TournamentEngine.replay(engine.history)
+    assert replayed.tournament(tournament_id) == tournament
+
+
+def test_a_force_close_that_cannot_pair_the_next_round_also_completes() -> None:
+    """The TO's escape hatch (ADR-0001): force-closing the last pairable Round
+    with an Assigned Result completes the Tournament the same way a player
+    confirmation does."""
+    engine = TournamentEngine()
+    tournament_id, last_pairable = report_last_pairable_round(engine)
+
+    engine.assign_result(
         tournament_id,
         last_pairable.match_id,
-        reported_by=last_pairable.player_a,
-        winner=last_pairable.player_a,
+        assigned_by="georges-to",
+        winner=last_pairable.player_b,
+        games_won=2,
+        games_lost=1,
+    )
+
+    tournament = engine.tournament(tournament_id)
+    assert tournament.phase == "completed"
+    assert tournament.unpairable_round == 3
+
+
+def test_a_completion_on_the_full_schedule_names_no_unpairable_round() -> None:
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    confirm_round(engine, tournament_id, round_number=1)
+    confirm_round(engine, tournament_id, round_number=2)
+
+    tournament = engine.tournament(tournament_id)
+    assert tournament.phase == "completed"
+    assert tournament.unpairable_round is None
+
+
+def test_reopening_an_unpairable_completion_takes_corrections() -> None:
+    """A completion forced by an unpairable Round is still a completion on
+    results, so the reopen window applies: the TO can correct the last Round's
+    result, and the correction re-completes the Tournament the same way."""
+    engine = TournamentEngine()
+    tournament_id, last_pairable = report_last_pairable_round(engine)
+    engine.confirm_result(
+        tournament_id, last_pairable.match_id, confirmed_by=last_pairable.player_b
+    )
+
+    engine.reopen_round(tournament_id, reopened_by="georges-to")
+    reopened = engine.tournament(tournament_id)
+    assert reopened.phase == "in_progress"
+    assert reopened.current_round == 2
+    assert reopened.unpairable_round is None
+
+    engine.assign_result(
+        tournament_id,
+        last_pairable.match_id,
+        assigned_by="georges-to",
+        winner=last_pairable.player_b,
         games_won=2,
         games_lost=0,
     )
-    with pytest.raises(EngineError, match="no rematch-free pairing for round 3"):
-        engine.confirm_result(
-            tournament_id, last_pairable.match_id, confirmed_by=last_pairable.player_b
-        )
-
-    # The failed close left no trace: Round 2 is still the open current Round,
-    # its result still Pending, and the failure repeats cleanly on retry.
-    tournament = engine.tournament(tournament_id)
-    assert tournament.phase == "in_progress"
-    assert tournament.current_round == 2
-    (still_pending,) = engine.pairings(tournament_id, round_number=2)
-    assert still_pending.status == "pending"
-    assert engine.standings(tournament_id)
-    with pytest.raises(EngineError, match="no rematch-free pairing for round 3"):
-        engine.confirm_result(
-            tournament_id, last_pairable.match_id, confirmed_by=last_pairable.player_b
-        )
-    # The other Round-closing path — a TO force-close — fails with the same
-    # pairing error, and ending early gets the real guidance (force-close
-    # first), not "has no round 3".
-    with pytest.raises(EngineError, match="no rematch-free pairing for round 3"):
-        engine.assign_result(
-            tournament_id,
-            last_pairable.match_id,
-            assigned_by="georges-to",
-            winner=last_pairable.player_a,
-            games_won=2,
-            games_lost=0,
-        )
-    with pytest.raises(EngineError, match="force-close"):
-        engine.end_tournament(tournament_id)
-    # The failed action never reached the history: a replay (what a bot
-    # restart does) reproduces the same sane state.
-    replayed = TournamentEngine.replay(engine.history)
-    assert replayed.tournament(tournament_id) == tournament
+    corrected = engine.tournament(tournament_id)
+    assert corrected.phase == "completed"
+    assert corrected.unpairable_round == 3
+    assert engine.standings(tournament_id)[0].player_id == last_pairable.player_b

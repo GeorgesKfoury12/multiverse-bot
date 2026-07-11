@@ -52,6 +52,37 @@ def confirm_round(
         )
 
 
+def report_last_pairable_round(engine: TournamentEngine) -> tuple[str, Match]:
+    """Walk a Tournament to the corner of issues #36/#37: 3 players on a
+    3-Round schedule, where the Round 1 loser drops, so Round 2 pairs the last
+    two fresh opponents and Round 3 has no rematch-free pairing. Returns the
+    tournament id and Round 2's sole Match, reported (player_a winning 2-0)
+    but not yet confirmed — the next confirmation closes the last pairable
+    Round.
+    """
+    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
+    for player_id in PLAYERS[:3]:
+        register_with_deck(engine, tournament_id, player_id)
+    engine.start_tournament(tournament_id, seed=42, round_count=3)
+    round_one = engine.pairings(tournament_id, round_number=1)
+    (played,) = [m for m in round_one if not m.is_bye]
+    engine.drop_player(tournament_id, played.player_b, dropped_by=played.player_b)
+    report_and_confirm(
+        engine, tournament_id, played, winner=played.player_a, games_won=2, games_lost=0
+    )
+    (last_pairable,) = engine.pairings(tournament_id, round_number=2)
+    engine.report_result(
+        tournament_id,
+        last_pairable.match_id,
+        reported_by=last_pairable.player_a,
+        winner=last_pairable.player_a,
+        games_won=2,
+        games_lost=0,
+    )
+    return tournament_id, last_pairable
+
+
 def report_and_confirm(
     engine: TournamentEngine,
     tournament_id: str,

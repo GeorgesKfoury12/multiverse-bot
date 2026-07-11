@@ -431,6 +431,14 @@ def standings_lines(
             f"{tournament.current_round}/{tournament.round_count}"
         )
     lines = [title]
+    if tournament.unpairable_round is not None:
+        # A schedule cut short explains itself (issue #37): the TO should not
+        # have to wonder where the remaining scheduled Rounds went.
+        lines.append(
+            f"Round {tournament.unpairable_round} has no rematch-free pairing "
+            "among the remaining players — the Tournament ends on the Rounds "
+            "already played."
+        )
     for row in standings:
         dropped = " (dropped)" if row.player_id in tournament.dropped else ""
         lines.append(
