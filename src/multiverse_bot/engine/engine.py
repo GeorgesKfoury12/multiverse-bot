@@ -752,10 +752,11 @@ class TournamentEngine:
         next_round = state.current_round + 1
         pairing = self._next_pairing(state, next_round)
         if pairing is None:
-            # The schedule has outlived the pairable Rounds (issue #37):
-            # never-repeat-an-opponent is a hard constraint, so rather than
-            # strand the TO the Tournament completes on the Rounds already
-            # played — end-early semantics, Standings-so-far final — and the
+            # The schedule has outlived the pairable Rounds (issue #37, and
+            # ADR-0001's one automatic ending): never-repeat-an-opponent is a
+            # hard constraint, so rather than strand the TO the Tournament
+            # completes on the Rounds already played — Standings-so-far
+            # final, reopenable like any completion on results — and the
             # snapshot names the Round it could not pair.
             state.phase = "completed"
             state.unpairable_round = next_round
