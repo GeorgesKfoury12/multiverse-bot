@@ -595,6 +595,29 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
             "schedule and play your Match here, then report the result."
         )
         bot.bindings_store.save_match_thread(match.match_id, thread.id)
+        await _delete_thread_created_notice(channel, thread)
+
+
+async def _delete_thread_created_notice(
+    channel: discord.TextChannel, thread: discord.Thread
+) -> None:
+    """Remove the "started a thread" system line Discord posts for a thread
+    created without a parent message, so the Pairings post stands alone
+    (#33). Cosmetic: without Manage Messages the line simply stays."""
+    try:
+        # Called right after create_thread, so the notice is the newest
+        # channel message; the small window only guards against a user
+        # posting in the same instant.
+        async for message in channel.history(limit=3):
+            if (
+                message.type is discord.MessageType.thread_created
+                and message.reference is not None
+                and message.reference.channel_id == thread.id
+            ):
+                await message.delete()
+                return
+    except discord.HTTPException:
+        pass
 
 
 async def announce_reveal(bot: MultiverseBot, tournament_id: str) -> None:
