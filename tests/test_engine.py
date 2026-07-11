@@ -391,3 +391,56 @@ def test_ending_early_freezes_standings_so_far() -> None:
             games_won=2,
             games_lost=0,
         )
+
+
+def test_a_close_that_cannot_pair_the_next_round_leaves_the_engine_untouched() -> None:
+    """When the confirmation closing a Round finds no rematch-free pairing for
+    the next one, the pairing error surfaces and the engine stays exactly as
+    it was (issue #36): the Round stays open, the confirm does not take, and
+    every query and retry keeps working instead of "has no round N"."""
+    engine = TournamentEngine()
+    tournament_id = engine.create_tournament(name="Weekly Riftbound #1")
+    engine.open_registration(tournament_id)
+    for player_id in PLAYERS[:3]:
+        register_with_deck(engine, tournament_id, player_id)
+    engine.start_tournament(tournament_id, seed=42, round_count=3)
+
+    round_one = engine.pairings(tournament_id, round_number=1)
+    (played,) = [m for m in round_one if not m.is_bye]
+    # The Round 1 loser drops, so Round 2 pairs the winner against the Round 1
+    # Bye — leaving Round 3 only two players who have already met.
+    engine.drop_player(tournament_id, played.player_b, dropped_by=played.player_b)
+    report_and_confirm(
+        engine, tournament_id, played, winner=played.player_a, games_won=2, games_lost=0
+    )
+
+    (last_pairable,) = engine.pairings(tournament_id, round_number=2)
+    engine.report_result(
+        tournament_id,
+        last_pairable.match_id,
+        reported_by=last_pairable.player_a,
+        winner=last_pairable.player_a,
+        games_won=2,
+        games_lost=0,
+    )
+    with pytest.raises(EngineError, match="no rematch-free pairing for round 3"):
+        engine.confirm_result(
+            tournament_id, last_pairable.match_id, confirmed_by=last_pairable.player_b
+        )
+
+    # The failed close left no trace: Round 2 is still the open current Round,
+    # its result still Pending, and the failure repeats cleanly on retry.
+    tournament = engine.tournament(tournament_id)
+    assert tournament.phase == "in_progress"
+    assert tournament.current_round == 2
+    (still_pending,) = engine.pairings(tournament_id, round_number=2)
+    assert still_pending.status == "pending"
+    assert engine.standings(tournament_id)
+    with pytest.raises(EngineError, match="no rematch-free pairing for round 3"):
+        engine.confirm_result(
+            tournament_id, last_pairable.match_id, confirmed_by=last_pairable.player_b
+        )
+    # The failed action never reached the history: a replay (what a bot
+    # restart does) reproduces the same sane state.
+    replayed = TournamentEngine.replay(engine.history)
+    assert replayed.tournament(tournament_id) == tournament

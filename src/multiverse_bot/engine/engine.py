@@ -609,7 +609,14 @@ class TournamentEngine:
     # -- history -----------------------------------------------------------
 
     def _record(self, action: Action) -> None:
-        self._apply(action)
+        try:
+            self._apply(action)
+        except BaseException:
+            # An action that fails mid-apply must not leave the state
+            # half-mutated (issue #36): unwind to what the history — which
+            # the action never reached — produces.
+            self._rewind_to_history()
+            raise
         self._history.append(action)
         if self._sink is None:
             return
@@ -620,10 +627,15 @@ class TournamentEngine:
             # the action by rebuilding from the still-persisted history, so
             # the command fails cleanly and can simply be retried.
             self._history.pop()
-            rebuilt = TournamentEngine.replay(tuple(self._history))
-            self._tournaments = rebuilt._tournaments
-            self._created_count = rebuilt._created_count
+            self._rewind_to_history()
             raise
+
+    def _rewind_to_history(self) -> None:
+        """Restore the in-memory state to exactly what the recorded history
+        replays to, discarding any partial mutation."""
+        rebuilt = TournamentEngine.replay(tuple(self._history))
+        self._tournaments = rebuilt._tournaments
+        self._created_count = rebuilt._created_count
 
     def _apply(self, action: Action) -> None:
         match action:
@@ -759,7 +771,6 @@ class TournamentEngine:
         self._recompute_match_points(state)
 
     def _begin_round(self, state: _TournamentState, round_number: int) -> None:
-        state.current_round = round_number
         rng = random.Random(f"{state.seed}:{round_number}")
 
         # Score Groups from most points down, random order within each group;
@@ -785,6 +796,9 @@ class TournamentEngine:
                 f"for round {round_number}"
             )
 
+        # Mutations start only now that a pairing exists: a Round that cannot
+        # be paired must leave the state untouched (issue #36).
+        state.current_round = round_number
         seats: list[tuple[str, str | None]] = list(pairing.pairs)
         if pairing.bye is not None:
             seats.append((pairing.bye, None))
