@@ -562,7 +562,7 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
         if match.is_bye:
             lines.append(
                 f"{index}. <@{match.player_a}> has the **Bye** — scored as a "
-                f"{match.games_won}-{match.games_lost} win. Enjoy the day off!"
+                f"{match.games_won}-{match.games_lost} win."
             )
         else:
             lines.append(f"{index}. <@{match.player_a}> vs <@{match.player_b}>")
@@ -610,8 +610,7 @@ async def announce_reveal(bot: MultiverseBot, tournament_id: str) -> None:
     channel = await bound_channel(bot, tournament_id, "decklists")
     await channel.send(
         f"## {tournament.name} — Deck Reveal\n"
-        "Sealed no more: every player's Deck, all at once. Lists are locked "
-        "for the whole Tournament — study away."
+        "Lists are locked for the whole tournament"
     )
     for player_id in tournament.players:
         # Post-start every Deck is public; the owner query works in any phase.
@@ -1795,8 +1794,7 @@ def _install_commands(bot: MultiverseBot) -> None:
         on_file = engine.deck(tournament_id, player_id, requested_by=player_id)
         suffix, files = bot.presented_deck(tournament_id, player_id, on_file)
         message = (
-            f"Deck locked in for **{target.name}**, Sealed until the start. "
-            f"On file:{suffix}"
+            f"Deck locked in for **{target.name}**, this message is only visible to you."
         )
         if interaction.response.is_done():
             await interaction.followup.send(message, files=files, ephemeral=True)
