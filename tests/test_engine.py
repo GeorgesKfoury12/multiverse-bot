@@ -440,6 +440,20 @@ def test_a_close_that_cannot_pair_the_next_round_leaves_the_engine_untouched() -
         engine.confirm_result(
             tournament_id, last_pairable.match_id, confirmed_by=last_pairable.player_b
         )
+    # The other Round-closing path — a TO force-close — fails with the same
+    # pairing error, and ending early gets the real guidance (force-close
+    # first), not "has no round 3".
+    with pytest.raises(EngineError, match="no rematch-free pairing for round 3"):
+        engine.assign_result(
+            tournament_id,
+            last_pairable.match_id,
+            assigned_by="georges-to",
+            winner=last_pairable.player_a,
+            games_won=2,
+            games_lost=0,
+        )
+    with pytest.raises(EngineError, match="force-close"):
+        engine.end_tournament(tournament_id)
     # The failed action never reached the history: a replay (what a bot
     # restart does) reproduces the same sane state.
     replayed = TournamentEngine.replay(engine.history)
