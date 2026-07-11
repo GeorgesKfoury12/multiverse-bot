@@ -5,4 +5,5 @@ Tournaments run async over a week (~one round per day) and real life causes dela
 ## Consequences
 
 - A Round advances only when all results are confirmed or the TO force-closes it; a stuck Round is a TO nudge away, never a bot judgment call.
+- One deliberate carve-out (issue #37): when the schedule outlives the pairable Rounds — no rematch-free pairing exists for the next scheduled Round — closing the current one completes the Tournament automatically, Standings-so-far final, with the final Standings announcing why. This is not a policy call taken from the TO: with rematches a hard constraint, no choice exists to leave them, and the alternative stranded the Tournament with no path to any final state. The reopen window still applies as for any completion on results.
 - Do not "helpfully" add auto-forfeit/auto-close timers. If the community later settles a standing no-show policy, automate it as an *opt-in default the TO can override*, superseding this ADR explicitly.

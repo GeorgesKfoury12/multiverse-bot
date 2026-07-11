@@ -397,10 +397,10 @@ def test_ending_early_freezes_standings_so_far() -> None:
 
 def test_a_close_that_cannot_pair_the_next_round_completes_the_tournament() -> None:
     """When Drops leave no rematch-free pairing for the next scheduled Round,
-    the confirmation that closes the current one completes the Tournament with
-    Standings-so-far final — end-early semantics, but automatic (issue #37).
-    The snapshot names the Round that could not be paired so callers can
-    announce why the schedule was cut short."""
+    the confirmation that closes the current one completes the Tournament
+    with Standings-so-far final, automatically (issue #37). The snapshot
+    names the Round that could not be paired so callers can announce why the
+    schedule was cut short."""
     engine = TournamentEngine()
     tournament_id, last_pairable = report_last_pairable_round(engine)
 
