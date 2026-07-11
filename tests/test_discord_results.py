@@ -9,7 +9,11 @@ what the handlers send.
 from pathlib import Path
 
 import pytest
-from conftest import confirm_round, create_tournament_with_players
+from conftest import (
+    confirm_round,
+    create_tournament_with_players,
+    report_last_pairable_round,
+)
 
 from multiverse_bot.bot import (
     CommandError,
@@ -235,6 +239,25 @@ def test_final_standings_crown_the_winner() -> None:
     assert "Final Standings" in lines[0]
     champion = standings[0].player_id
     assert f"<@{champion}>" in lines[-1]
+    assert "🏆" in lines[-1]
+
+
+def test_final_standings_say_why_a_cut_short_schedule_ended() -> None:
+    """A Tournament that completed because its next Round had no rematch-free
+    pairing (issue #37) announces the why with its final Standings, so the TO
+    is not left wondering where the scheduled Rounds went."""
+    engine = TournamentEngine()
+    tournament_id, last_pairable = report_last_pairable_round(engine)
+    assert last_pairable.player_b is not None
+    engine.confirm_result(
+        tournament_id, last_pairable.match_id, confirmed_by=last_pairable.player_b
+    )
+
+    tournament = engine.tournament(tournament_id)
+    lines = standings_lines(tournament, engine.standings(tournament_id))
+
+    assert "Final Standings" in lines[0]
+    assert "Round 3 has no rematch-free pairing" in lines[1]
     assert "🏆" in lines[-1]
 
 

@@ -28,7 +28,7 @@ from multiverse_bot.engine.actions import (
     TournamentEnded,
     TournamentStarted,
 )
-from multiverse_bot.engine.pairing import pair_round
+from multiverse_bot.engine.pairing import RoundPairing, pair_round
 from multiverse_bot.engine.ruleset import RULESETS, Ruleset
 from multiverse_bot.engine.tiebreakers import (
     MatchRecord,
@@ -55,6 +55,9 @@ class Tournament:
     those who have left — they stay in ``players`` and in Standings.
     ``ended_early`` marks a completed Tournament the TO ended (its last Round
     voided, not closed on results) — the one completion a reopen cannot undo.
+    ``unpairable_round`` names the scheduled Round that had no rematch-free
+    pairing left, on a Tournament that completed early because of it — the
+    why behind a schedule cut short, for callers to announce.
     """
 
     tournament_id: str
@@ -65,6 +68,7 @@ class Tournament:
     current_round: int | None = None
     dropped: tuple[str, ...] = ()
     ended_early: bool = False
+    unpairable_round: int | None = None
 
 
 @dataclass(frozen=True)
@@ -165,6 +169,7 @@ class _TournamentState:
     # Drop order, kept as a list so replay reproduces identical snapshots.
     dropped: list[str] = field(default_factory=list)
     ended_early: bool = False
+    unpairable_round: int | None = None
     rounds: dict[int, list[Match]] = field(default_factory=dict)
     matches_by_id: dict[str, Match] = field(default_factory=dict)
     results_by_match: dict[str, _MatchResult] = field(default_factory=dict)
@@ -518,6 +523,7 @@ class TournamentEngine:
             current_round=state.current_round,
             dropped=tuple(state.dropped),
             ended_early=state.ended_early,
+            unpairable_round=state.unpairable_round,
         )
 
     def players_missing_decks(self, tournament_id: str) -> tuple[str, ...]:
@@ -671,7 +677,10 @@ class TournamentEngine:
                 )
                 state.match_points = {player: 0 for player in state.players}
                 state.opponents = {player: set() for player in state.players}
-                self._begin_round(state, 1)
+                pairing = self._next_pairing(state, 1)
+                # A fresh field always pairs: no opponents yet, Bye on odd.
+                assert pairing is not None
+                self._begin_round(state, 1, pairing)
             case ResultReported(
                 tournament_id=tournament_id,
                 match_id=match_id,
@@ -723,8 +732,10 @@ class TournamentEngine:
                 if state.phase == "completed":
                     # The final Round's Matches are all still in place — the
                     # Round simply stops being closed, and the completion
-                    # re-fires when its results are all confirmed again.
+                    # re-fires when its results are all confirmed again
+                    # (re-judging pairability, hence the cleared marker).
                     state.phase = "in_progress"
+                    state.unpairable_round = None
                 else:
                     self._void_current_round(state)
 
@@ -737,8 +748,19 @@ class TournamentEngine:
             return
         if state.current_round == state.round_count:
             state.phase = "completed"
+            return
+        next_round = state.current_round + 1
+        pairing = self._next_pairing(state, next_round)
+        if pairing is None:
+            # The schedule has outlived the pairable Rounds (issue #37):
+            # never-repeat-an-opponent is a hard constraint, so rather than
+            # strand the TO the Tournament completes on the Rounds already
+            # played — end-early semantics, Standings-so-far final — and the
+            # snapshot names the Round it could not pair.
+            state.phase = "completed"
+            state.unpairable_round = next_round
         else:
-            self._begin_round(state, state.current_round + 1)
+            self._begin_round(state, next_round, pairing)
 
     def _void_current_round(self, state: _TournamentState) -> None:
         """Unwind the freshly paired current Round — an early end declares it
@@ -770,7 +792,12 @@ class TournamentEngine:
         )
         self._recompute_match_points(state)
 
-    def _begin_round(self, state: _TournamentState, round_number: int) -> None:
+    def _next_pairing(
+        self, state: _TournamentState, round_number: int
+    ) -> RoundPairing | None:
+        """The Round's rematch-free Pairings, or None when none exist — decided
+        before any state mutation (issue #36), so an unpairable Round becomes
+        a graceful completion instead of a half-advanced engine."""
         rng = random.Random(f"{state.seed}:{round_number}")
 
         # Score Groups from most points down, random order within each group;
@@ -784,20 +811,11 @@ class TournamentEngine:
             group = by_points[points]
             rng.shuffle(group)
             groups.append(group)
+        return pair_round(groups, state.opponents, state.byes)
 
-        pairing = pair_round(groups, state.opponents, state.byes)
-        if pairing is None:
-            # Unreachable at the standard Swiss count (ceil(log2 n) rounds
-            # always admit a rematch-free pairing), but a TO round-count
-            # override past it can exhaust legal pairings in adversarial
-            # histories; the hard stop keeps a rematch from slipping through.
-            raise EngineError(
-                f"{state.tournament_id} has no rematch-free pairing "
-                f"for round {round_number}"
-            )
-
-        # Mutations start only now that a pairing exists: a Round that cannot
-        # be paired must leave the state untouched (issue #36).
+    def _begin_round(
+        self, state: _TournamentState, round_number: int, pairing: RoundPairing
+    ) -> None:
         state.current_round = round_number
         seats: list[tuple[str, str | None]] = list(pairing.pairs)
         if pairing.bye is not None:
