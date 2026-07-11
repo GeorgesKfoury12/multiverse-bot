@@ -17,6 +17,10 @@ uv sync
 cp .env.example .env  # then fill in DISCORD_TOKEN and TO_ROLE_ID (see comments)
 ```
 
+The bot needs permission to send messages and create public threads in the
+bound channels, plus **Manage Messages** in the pairings channel to clean up
+Discord's "started a thread" system lines (without it they just stay).
+
 ## Running
 
 ```bash
