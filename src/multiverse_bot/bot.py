@@ -478,6 +478,10 @@ class MultiverseBot(commands.Bot):
             guild = discord.Object(self.guild_id)
             self.tree.copy_global_to(guild=guild)
             await self.tree.sync(guild=guild)
+            # An earlier run may have synced the same commands globally;
+            # clear them or the picker offers every command twice (#30).
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
         else:
             await self.tree.sync()
 
