@@ -738,25 +738,34 @@ async def _delete_thread_created_notice(
 
 
 async def tidy_match_threads(
-    bot: MultiverseBot, thread_ids: Iterable[int], tidied: bool = True
-) -> None:
+    bot: MultiverseBot, thread_ids: Iterable[int], undo: bool = False
+) -> int:
     """Archive and lock Match threads once their Tournament ends, tidying
     them out of the pairings channel's live thread list (issue #35). Archived
     and locked, never deleted: threads hold the scheduling and dispute record
-    that day-later disputes are settled from. ``tidied=False`` undoes it for
-    a reopened final Round, whose corrections happen back in those threads —
+    that day-later disputes are settled from. ``undo`` un-tidies instead, for
+    a reopened final Round whose corrections happen back in those threads —
     locked ones would refuse the players and any TO without Manage Threads.
 
     Best-effort, like the thread-created notice cleanup: a thread Discord
     cannot produce or edit (deleted, missing permissions) is skipped, and a
-    failed tidy never blocks the announcements around it."""
+    failed tidy never blocks the announcements around it. Returns how many
+    threads were skipped, for the caller whose message would otherwise
+    overclaim (the reopen announcing threads as unlocked)."""
+    skipped = 0
     for thread_id in thread_ids:
         try:
             thread = bot.get_channel(thread_id) or await bot.fetch_channel(thread_id)
-            if isinstance(thread, discord.Thread):
-                await thread.edit(archived=tidied, locked=tidied)
-        except discord.HTTPException:
+        except (discord.HTTPException, discord.InvalidData):
+            thread = None
+        if not isinstance(thread, discord.Thread):
+            skipped += 1
             continue
+        try:
+            await thread.edit(archived=not undo, locked=not undo)
+        except discord.HTTPException:
+            skipped += 1
+    return skipped
 
 
 async def announce_reveal(bot: MultiverseBot, tournament_id: str) -> None:
@@ -1307,7 +1316,7 @@ class TOConfirmButton(
             # back in the reopened final Round's, so exactly those un-tidy —
             # earlier Rounds stay archived (issue #35).
             assert reopened is not None
-            await tidy_match_threads(
+            stuck = await tidy_match_threads(
                 bot,
                 round_thread_ids(
                     bot.engine,
@@ -1315,14 +1324,20 @@ class TOConfirmButton(
                     self.tournament_id,
                     reopened,
                 ),
-                tidied=False,
+                undo=True,
+            )
+            threads_note = (
+                "and the final Round's Match threads are unlocked for the correction"
+                if not stuck
+                else "but some Match threads could not be unlocked — a still-"
+                "locked Match takes its ruling by ID: "
+                "`/tournament assign-result match:<ID>`"
             )
             announcement = (
                 f"🔓 The TO reopened the final Round of **{tournament.name}** "
                 "to correct a result — the posted final Standings stop "
-                "counting, and the final Round's Match threads are unlocked "
-                "for the correction. The Tournament completes again, with "
-                "fresh final Standings, when every result is confirmed."
+                f"counting, {threads_note}. The Tournament completes again, "
+                "with fresh final Standings, when every result is confirmed."
             )
         else:
             announcement = (
@@ -1349,7 +1364,7 @@ class TOConfirmButton(
         # Collected before the end voids the current Round out of the engine:
         # the voided Round's threads are already open on Discord, so the tidy
         # below must sweep them too.
-        threads = tournament_thread_ids(
+        thread_ids = tournament_thread_ids(
             bot.engine, bot.bindings_store.match_thread, tournament
         )
         # The engine re-checks that the Round is untouched; a report that
@@ -1374,7 +1389,7 @@ class TOConfirmButton(
                 "A TO can re-post with `/tournament post-standings`.",
                 ephemeral=True,
             )
-        await tidy_match_threads(bot, threads)
+        await tidy_match_threads(bot, thread_ids)
 
 
 def to_confirmation(
