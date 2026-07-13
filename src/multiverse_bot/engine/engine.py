@@ -959,9 +959,12 @@ class TournamentEngine:
             )
         if winner is None:
             if games_won != games_lost:
+                score = f"{games_won}-{games_lost}" + (
+                    f"-{games_drawn}" if games_drawn else ""
+                )
                 raise EngineError(
-                    f"{games_won}-{games_lost} has a winner — pick who won in "
-                    "the winner field, or report a drawn score like 1-1-1"
+                    f"{score} has a winner — pick who won in the winner "
+                    "field, or report a drawn score like 1-1-1"
                 )
         else:
             if winner not in (match.player_a, match.player_b):
