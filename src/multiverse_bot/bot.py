@@ -260,7 +260,7 @@ def mention_names(*player_ids: str | None) -> dict[str, str]:
 
 
 async def player_names(
-    client: discord.Client, guild: discord.Guild, player_ids: Iterable[str]
+    client: discord.Client, guild: discord.Guild, player_ids: Iterable[str | None]
 ) -> dict[str, str]:
     """Players by display name, for the messages that do not ping them: a
     suppressed mention carries no member data, so clients without the member
@@ -268,10 +268,11 @@ async def player_names(
 
     Members show their server display name; a player who has left the server
     still resolves through their global profile; only an ID Discord cannot
-    resolve at all falls back to ``player <id>``."""
+    resolve at all falls back to ``player <id>``. Like ``mention_names``, a
+    ``None`` (a Bye's missing opponent) is simply absent."""
     names: dict[str, str] = {}
     for player_id in player_ids:
-        if player_id not in names:
+        if player_id is not None and player_id not in names:
             resolved = await _resolved_name(client, guild, player_id)
             names[player_id] = (
                 resolved if resolved is not None else f"player {player_id}"
@@ -304,6 +305,12 @@ async def _resolved_name(
         return (await client.fetch_user(user_id)).display_name
     except discord.HTTPException:
         return None
+
+
+def pinged_result_phrase(match: Match) -> str:
+    """``result_phrase`` for the messages that ping the Match's players (the
+    TO's thread rulings), where the mention form stays the display form."""
+    return result_phrase(match, mention_names(match.player_a, match.player_b))
 
 
 def result_phrase(match: Match, names: Mapping[str, str]) -> str:
@@ -727,9 +734,7 @@ async def announce_result(
     marks a TO replacement of a result this channel already announced, so the
     record contradicts itself out loud rather than silently."""
     channel = await bound_channel(bot, tournament.tournament_id, "scores")
-    names = await player_names(
-        bot, channel.guild, (p for p in (match.player_a, match.player_b) if p)
-    )
+    names = await player_names(bot, channel.guild, (match.player_a, match.player_b))
     note = " (corrected by the TO)" if corrected else ""
     await channel.send(
         f"⚔️ **{tournament.name}** Round {match.round_number}: "
@@ -930,8 +935,9 @@ class PendingResultButton(
             return
         # Acknowledge in the thread first — the channel posts below each cost
         # a Discord round-trip and the interaction token is on a clock. The
-        # clicker is named, not pinged: an edit carries no mention data, so
-        # their mention could render as a raw tag (issue #34).
+        # clicker is named as text: an acknowledgment of their own click
+        # should neither ping anyone nor depend on mention rendering
+        # (issue #34).
         mark = "✅ Confirmed" if self.verb == "confirm" else "⚠️ Disputed"
         assert interaction.message is not None
         await interaction.response.edit_message(
@@ -1549,9 +1555,8 @@ def _install_commands(bot: MultiverseBot) -> None:
         engine.confirm_result_as_to(
             target.tournament_id, match.match_id, actor=str(interaction.user.id)
         )
-        phrase = result_phrase(match, mention_names(match.player_a, match.player_b))
         await interaction.response.send_message(
-            f"✅ The TO confirmed the reported result: {phrase}.",
+            f"✅ The TO confirmed the reported result: {pinged_result_phrase(match)}.",
             allowed_mentions=player_mentions(match),
         )
         await announce_confirmed_result(
@@ -1601,11 +1606,9 @@ def _install_commands(bot: MultiverseBot) -> None:
         )
         assert assigned is not None
         note = " (replacing the confirmed result)" if corrected else ""
-        phrase = result_phrase(
-            assigned, mention_names(assigned.player_a, assigned.player_b)
-        )
         await interaction.response.send_message(
-            f"⚖️ The TO set {match.match_id}'s result{note}: {phrase}.",
+            f"⚖️ The TO set {match.match_id}'s result{note}: "
+            f"{pinged_result_phrase(assigned)}.",
             allowed_mentions=player_mentions(match),
         )
         await announce_confirmed_result(
