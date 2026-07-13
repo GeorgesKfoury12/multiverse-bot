@@ -203,6 +203,8 @@ def test_a_draw_report_round_trips_through_a_button() -> None:
 
 # -- rendering Standings ------------------------------------------------------
 
+NAMES = {"alice": "Alice", "bob": "Bob", "carol": "Carol", "dave": "Dave"}
+
 
 def test_standings_between_rounds_show_the_round_being_entered() -> None:
     engine = TournamentEngine()
@@ -210,7 +212,7 @@ def test_standings_between_rounds_show_the_round_being_entered() -> None:
     confirm_round(engine, tournament_id, round_number=1)
 
     lines = standings_lines(
-        engine.tournament(tournament_id), engine.standings(tournament_id)
+        engine.tournament(tournament_id), engine.standings(tournament_id), NAMES
     )
 
     assert "entering Round 2/2" in lines[0]
@@ -219,9 +221,12 @@ def test_standings_between_rounds_show_the_round_being_entered() -> None:
     assert lines[1].startswith("1. ")
     assert "**3 pts**" in lines[1]
     assert "**0 pts**" in lines[3]
-    # Every row mentions its player and carries the full Tiebreaker stack.
+    # Every row names its player — as text, not a mention: Standings rows do
+    # not ping, and a suppressed mention renders raw on uncached clients
+    # (issue #34). The full Tiebreaker stack rides along.
     for row in lines[1:]:
-        assert "<@" in row
+        assert any(name in row for name in NAMES.values())
+        assert "<@" not in row
         assert "OMW" in row and "GW" in row and "OGW" in row
 
 
@@ -233,12 +238,15 @@ def test_final_standings_crown_the_winner() -> None:
 
     tournament = engine.tournament(tournament_id)
     standings = engine.standings(tournament_id)
-    lines = standings_lines(tournament, standings)
+    lines = standings_lines(tournament, standings, NAMES)
 
     assert tournament.phase == "completed"
     assert "Final Standings" in lines[0]
     champion = standings[0].player_id
+    # The winner announcement pings, so the champion stays in mention form —
+    # their row above, like every row, is plain text.
     assert f"<@{champion}>" in lines[-1]
+    assert NAMES[champion] in lines[1]
     assert "🏆" in lines[-1]
 
 
@@ -254,7 +262,7 @@ def test_final_standings_say_why_a_cut_short_schedule_ended() -> None:
     )
 
     tournament = engine.tournament(tournament_id)
-    lines = standings_lines(tournament, engine.standings(tournament_id))
+    lines = standings_lines(tournament, engine.standings(tournament_id), NAMES)
 
     assert "Final Standings" in lines[0]
     assert "Round 3 has no rematch-free pairing" in lines[1]
@@ -279,10 +287,11 @@ def test_a_dead_heat_final_names_co_champions() -> None:
     engine.confirm_result(tournament_id, match.match_id, confirmed_by=match.player_b)
 
     lines = standings_lines(
-        engine.tournament(tournament_id), engine.standings(tournament_id)
+        engine.tournament(tournament_id), engine.standings(tournament_id), NAMES
     )
 
-    # A 1-1-1 draw leaves the two players identical through the whole stack.
+    # A 1-1-1 draw leaves the two players identical through the whole stack;
+    # the co-champions share the pinged (mention-form) crowning line.
     assert "<@alice>" in lines[-1] and "<@bob>" in lines[-1]
 
 
@@ -294,9 +303,9 @@ def test_standings_mark_dropped_players() -> None:
     engine.drop_player(tournament_id, quitter, dropped_by=quitter)
 
     lines = standings_lines(
-        engine.tournament(tournament_id), engine.standings(tournament_id)
+        engine.tournament(tournament_id), engine.standings(tournament_id), NAMES
     )
 
     dropped_rows = [line for line in lines if "(dropped)" in line]
     assert len(dropped_rows) == 1
-    assert f"<@{quitter}>" in dropped_rows[0]
+    assert NAMES[quitter] in dropped_rows[0]

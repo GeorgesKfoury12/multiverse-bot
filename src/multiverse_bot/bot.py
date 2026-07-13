@@ -8,15 +8,18 @@ Match threads, and the bytes behind image Decks. Restarting the bot is
 therefore just ``open_engine`` plus reading that wiring back — the
 confirm/Dispute buttons are stateless too, resolved from their custom_id.
 
-Engine player IDs are Discord user IDs as strings, so ``<@id>`` mentions are
-the display form everywhere.
+Engine player IDs are Discord user IDs as strings. A message that pings shows
+its players as live ``<@id>`` mentions; one that suppresses pings says their
+display names as plain text instead, because a suppressed mention carries no
+member data and renders as the raw tag on clients without the member cached
+(issue #34).
 """
 
 import io
 import os
 import random
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 
 import discord
 from discord import app_commands
@@ -249,21 +252,81 @@ def open_match_by_reference(
     return open_match_by_id(engine, hosted)
 
 
-def result_phrase(match: Match) -> str:
+def mention_names(*player_ids: str | None) -> dict[str, str]:
+    """Players in mention form, for the messages that ping them: a pinged
+    mention is in the message's mention data, so every client renders it. A
+    ``None`` (a Bye's missing opponent) is simply absent."""
+    return {player: f"<@{player}>" for player in player_ids if player is not None}
+
+
+async def player_names(
+    client: discord.Client, guild: discord.Guild, player_ids: Iterable[str]
+) -> dict[str, str]:
+    """Players by display name, for the messages that do not ping them: a
+    suppressed mention carries no member data, so clients without the member
+    cached render the raw ``<@id>`` tag instead of a name (issue #34).
+
+    Members show their server display name; a player who has left the server
+    still resolves through their global profile; only an ID Discord cannot
+    resolve at all falls back to ``player <id>``."""
+    names: dict[str, str] = {}
+    for player_id in player_ids:
+        if player_id not in names:
+            resolved = await _resolved_name(client, guild, player_id)
+            names[player_id] = (
+                resolved if resolved is not None else f"player {player_id}"
+            )
+    return names
+
+
+async def player_name(
+    client: discord.Client, guild: discord.Guild, player_id: str
+) -> str:
+    return (await player_names(client, guild, (player_id,)))[player_id]
+
+
+async def _resolved_name(
+    client: discord.Client, guild: discord.Guild, player_id: str
+) -> str | None:
+    try:
+        user_id = int(player_id)
+    except ValueError:
+        # Engine IDs are opaque strings; only production guarantees snowflakes.
+        return None
+    member = guild.get_member(user_id)
+    if member is not None:
+        return member.display_name
+    try:
+        return (await guild.fetch_member(user_id)).display_name
+    except discord.HTTPException:
+        pass
+    try:
+        return (await client.fetch_user(user_id)).display_name
+    except discord.HTTPException:
+        return None
+
+
+def result_phrase(match: Match, names: Mapping[str, str]) -> str:
     """A Match's result as one sentence fragment — the wording every surface
     shares (the scores channel, the TO's thread replies, the force-close
-    walk-through). The Match must carry result fields."""
+    walk-through). The Match must carry result fields; ``names`` renders the
+    players (``player_names`` text, or ``mention_names`` where the message
+    pings them)."""
     assert match.games_won is not None
     assert match.games_lost is not None and match.games_drawn is not None
     score = format_score(match.games_won, match.games_lost, match.games_drawn)
     if match.winner is None:
-        return f"<@{match.player_a}> and <@{match.player_b}> drew {score}"
+        assert match.player_b is not None
+        return f"{names[match.player_a]} and {names[match.player_b]} drew {score}"
     loser = match.player_b if match.winner == match.player_a else match.player_a
-    return f"<@{match.winner}> beat <@{loser}> {score}"
+    assert loser is not None
+    return f"{names[match.winner]} beat {names[loser]} {score}"
 
 
 def unfinished_match_lines(
-    matches: Iterable[Match], thread_for: Callable[[str], int | None]
+    matches: Iterable[Match],
+    thread_for: Callable[[str], int | None],
+    names: Mapping[str, str],
 ) -> list[str]:
     """The force-close walk-through: one line per unfinished Match saying who
     plays, where (its thread, or the Match ID if none is on file), and where
@@ -275,10 +338,16 @@ def unfinished_match_lines(
         if match.status == "awaiting_report":
             standing = "no report yet"
         else:
+            assert match.reported_by is not None
             flag = "Pending" if match.status == "pending" else "Disputed"
-            standing = f"{flag} — {result_phrase(match)}, per <@{match.reported_by}>"
+            standing = (
+                f"{flag} — {result_phrase(match, names)}, "
+                f"per {names[match.reported_by]}"
+            )
+        assert match.player_b is not None
         lines.append(
-            f"- <@{match.player_a}> vs <@{match.player_b}> in {where} — {standing}"
+            f"- {names[match.player_a]} vs {names[match.player_b]} in {where} "
+            f"— {standing}"
         )
     return lines
 
@@ -417,12 +486,13 @@ def _percent(value: Fraction) -> str:
 
 
 def standings_lines(
-    tournament: Tournament, standings: tuple[Standing, ...]
+    tournament: Tournament, standings: tuple[Standing, ...], names: Mapping[str, str]
 ) -> list[str]:
     """The Standings post, one ranked row per player with the full Tiebreaker
     stack visible so placements explain themselves (spec #1 story 27). Final
     Standings crown the winner — rank-1 players still tied through the whole
-    stack share the title (story 28)."""
+    stack share the title (story 28). Rows never ping, so they carry ``names``
+    as text; the crowning line pings, so champions stay in mention form."""
     if tournament.phase == "completed":
         title = f"## {tournament.name} — Final Standings"
     else:
@@ -442,7 +512,7 @@ def standings_lines(
     for row in standings:
         dropped = " (dropped)" if row.player_id in tournament.dropped else ""
         lines.append(
-            f"{row.rank}. <@{row.player_id}>{dropped} — **{row.match_points} pts** "
+            f"{row.rank}. {names[row.player_id]}{dropped} — **{row.match_points} pts** "
             f"(OMW {_percent(row.omw)} · GW {_percent(row.gw)} "
             f"· OGW {_percent(row.ogw)})"
         )
@@ -557,27 +627,21 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
     assert round_number is not None
     channel = await bound_channel(bot, tournament_id, "pairings")
     matches = engine.pairings(tournament_id, round_number)
-
-    async def display_name(player_id: str) -> str:
-        member = channel.guild.get_member(int(player_id))
-        if member is None:
-            try:
-                member = await channel.guild.fetch_member(int(player_id))
-            except discord.HTTPException:
-                return f"player {player_id}"
-        return member.display_name
+    names = await player_names(bot, channel.guild, tournament.players)
 
     lines = [
         f"## {tournament.name} — Round {round_number}/{tournament.round_count} Pairings"
     ]
     for index, match in enumerate(matches, start=1):
         if match.is_bye:
+            # The byed player is pinged (see below), so their mention is live.
             lines.append(
                 f"{index}. <@{match.player_a}> has the **Bye** — scored as a "
                 f"{match.games_won}-{match.games_lost} win."
             )
         else:
-            lines.append(f"{index}. <@{match.player_a}> vs <@{match.player_b}>")
+            assert match.player_b is not None
+            lines.append(f"{index}. {names[match.player_a]} vs {names[match.player_b]}")
     # The channel post lists, the Match threads ping — except byed players,
     # whose only notification is this post, so their mention stays live.
     byed = [discord.Object(int(m.player_a)) for m in matches if m.is_bye]
@@ -594,10 +658,7 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
         if bot.bindings_store.match_thread(match.match_id) is not None:
             continue  # already announced before a crash or re-post
         assert match.player_b is not None
-        versus = (
-            f"{await display_name(match.player_a)} vs "
-            f"{await display_name(match.player_b)}"
-        )
+        versus = f"{names[match.player_a]} vs {names[match.player_b]}"
         thread = await channel.create_thread(
             name=f"R{round_number}: {versus}"[:100],
             type=discord.ChannelType.public_thread,
@@ -643,16 +704,16 @@ async def announce_reveal(bot: MultiverseBot, tournament_id: str) -> None:
     engine = bot.engine
     tournament = engine.tournament(tournament_id)
     channel = await bound_channel(bot, tournament_id, "decklists")
+    names = await player_names(bot, channel.guild, tournament.players)
     await channel.send(
-        f"## {tournament.name} — Deck Reveal\n"
-        "Lists are locked for the whole tournament"
+        f"## {tournament.name} — Deck Reveal\nLists are locked for the whole tournament"
     )
     for player_id in tournament.players:
         # Post-start every Deck is public; the owner query works in any phase.
         deck = engine.deck(tournament_id, player_id, requested_by=player_id)
         suffix, files = bot.presented_deck(tournament_id, player_id, deck)
         await channel.send(
-            f"**<@{player_id}>'s Deck**{suffix}",
+            f"**{names[player_id]}'s Deck**{suffix}",
             files=files,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -666,10 +727,13 @@ async def announce_result(
     marks a TO replacement of a result this channel already announced, so the
     record contradicts itself out loud rather than silently."""
     channel = await bound_channel(bot, tournament.tournament_id, "scores")
+    names = await player_names(
+        bot, channel.guild, (p for p in (match.player_a, match.player_b) if p)
+    )
     note = " (corrected by the TO)" if corrected else ""
     await channel.send(
         f"⚔️ **{tournament.name}** Round {match.round_number}: "
-        f"{result_phrase(match)}{note}",
+        f"{result_phrase(match, names)}{note}",
         allowed_mentions=discord.AllowedMentions.none(),
     )
 
@@ -680,6 +744,7 @@ async def announce_standings(bot: MultiverseBot, tournament_id: str) -> None:
     tournament = bot.engine.tournament(tournament_id)
     standings = bot.engine.standings(tournament_id)
     channel = await bound_channel(bot, tournament_id, "standings")
+    names = await player_names(bot, channel.guild, tournament.players)
     # Standings rows never ping; the winner announcement is the exception.
     champions = (
         [discord.Object(int(row.player_id)) for row in standings if row.rank == 1]
@@ -687,7 +752,7 @@ async def announce_standings(bot: MultiverseBot, tournament_id: str) -> None:
         else []
     )
     await channel.send(
-        "\n".join(standings_lines(tournament, standings)),
+        "\n".join(standings_lines(tournament, standings, names)),
         allowed_mentions=discord.AllowedMentions(
             everyone=False, roles=False, users=champions
         ),
@@ -864,12 +929,15 @@ class PendingResultButton(
             await interaction.response.send_message(str(error), ephemeral=True)
             return
         # Acknowledge in the thread first — the channel posts below each cost
-        # a Discord round-trip and the interaction token is on a clock.
+        # a Discord round-trip and the interaction token is on a clock. The
+        # clicker is named, not pinged: an edit carries no mention data, so
+        # their mention could render as a raw tag (issue #34).
         mark = "✅ Confirmed" if self.verb == "confirm" else "⚠️ Disputed"
         assert interaction.message is not None
         await interaction.response.edit_message(
             content=(
-                f"{interaction.message.content}\n{mark} by {interaction.user.mention}."
+                f"{interaction.message.content}\n"
+                f"{mark} by {interaction.user.display_name}."
             ),
             view=None,
         )
@@ -887,8 +955,10 @@ class PendingResultButton(
         (spec #1 story 19)."""
         thread_id = bot.bindings_store.match_thread(self.match_id)
         where = f"<#{thread_id}>" if thread_id is not None else "its Match thread"
+        # The disputer is named, not pinged (only the TO role is), so their
+        # mention would render raw on uncached clients (issue #34).
         await interaction.followup.send(
-            f"<@&{bot.to_role_id}> — {interaction.user.mention} disputed the "
+            f"<@&{bot.to_role_id}> — {interaction.user.display_name} disputed the "
             f"Reported Result in {where}. Sort it out there, then either "
             "player can `/report` again — or the TO rules on it.",
             allowed_mentions=discord.AllowedMentions(
@@ -1009,11 +1079,13 @@ class TOConfirmButton(
 
     async def _drop(self, bot: MultiverseBot, interaction: discord.Interaction) -> None:
         tournament = self._in_progress_tournament(bot.engine)
+        assert interaction.guild is not None
+        dropped = await player_name(bot, interaction.guild, self.argument)
         bot.engine.drop_player(
             self.tournament_id, self.argument, dropped_by=str(interaction.user.id)
         )
         await interaction.response.edit_message(
-            content=f"<@{self.argument}> is dropped from **{tournament.name}**.",
+            content=f"{dropped} is dropped from **{tournament.name}**.",
             view=None,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -1049,11 +1121,13 @@ class TOConfirmButton(
         require_previewed_unregister(
             bot.engine, tournament, self.argument, deckless=self.qualifier == "deckless"
         )
+        assert interaction.guild is not None
+        removed = await player_name(bot, interaction.guild, self.argument)
         unregister_and_discard(
             bot, self.tournament_id, self.argument, str(interaction.user.id)
         )
         await interaction.response.edit_message(
-            content=f"<@{self.argument}> is unregistered from **{tournament.name}**.",
+            content=f"{removed} is unregistered from **{tournament.name}**.",
             view=None,
             allowed_mentions=discord.AllowedMentions.none(),
         )
@@ -1090,7 +1164,11 @@ class TOConfirmButton(
             raise CommandError(
                 f"Round {tournament.current_round} has no unfinished Matches left"
             )
-        lines = unfinished_match_lines(remaining, bot.bindings_store.match_thread)
+        assert interaction.guild is not None
+        names = await player_names(bot, interaction.guild, tournament.players)
+        lines = unfinished_match_lines(
+            remaining, bot.bindings_store.match_thread, names
+        )
         closing = "\nThe Round closes itself the moment the last result lands."
         if any(bot.bindings_store.match_thread(m.match_id) is None for m in remaining):
             closing = (
@@ -1412,7 +1490,7 @@ def _install_commands(bot: MultiverseBot) -> None:
             ) from None
         suffix, files = bot.presented_deck(target.tournament_id, str(player.id), deck)
         await interaction.response.send_message(
-            f"{player.mention}'s Deck in **{target.name}**:{suffix}",
+            f"{player.display_name}'s Deck in **{target.name}**:{suffix}",
             files=files,
             ephemeral=True,
             allowed_mentions=discord.AllowedMentions.none(),
@@ -1471,8 +1549,9 @@ def _install_commands(bot: MultiverseBot) -> None:
         engine.confirm_result_as_to(
             target.tournament_id, match.match_id, actor=str(interaction.user.id)
         )
+        phrase = result_phrase(match, mention_names(match.player_a, match.player_b))
         await interaction.response.send_message(
-            f"✅ The TO confirmed the reported result: {result_phrase(match)}.",
+            f"✅ The TO confirmed the reported result: {phrase}.",
             allowed_mentions=player_mentions(match),
         )
         await announce_confirmed_result(
@@ -1522,8 +1601,11 @@ def _install_commands(bot: MultiverseBot) -> None:
         )
         assert assigned is not None
         note = " (replacing the confirmed result)" if corrected else ""
+        phrase = result_phrase(
+            assigned, mention_names(assigned.player_a, assigned.player_b)
+        )
         await interaction.response.send_message(
-            f"⚖️ The TO set {match.match_id}'s result{note}: {result_phrase(assigned)}.",
+            f"⚖️ The TO set {match.match_id}'s result{note}: {phrase}.",
             allowed_mentions=player_mentions(match),
         )
         await announce_confirmed_result(
@@ -1551,11 +1633,15 @@ def _install_commands(bot: MultiverseBot) -> None:
             )
         count = len(remaining)
         need = "1 Match still needs" if count == 1 else f"{count} Matches still need"
+        assert interaction.guild is not None
+        names = await player_names(bot, interaction.guild, target.players)
         await interaction.response.send_message(
             f"Force-close Round {target.current_round} of **{target.name}**? "
             f"{need} a result:\n"
             + "\n".join(
-                unfinished_match_lines(remaining, bot.bindings_store.match_thread)
+                unfinished_match_lines(
+                    remaining, bot.bindings_store.match_thread, names
+                )
             )
             + "\nConfirming announces the force-close and hands you the "
             "walk-through; every ruling stays yours.",
@@ -1604,9 +1690,9 @@ def _install_commands(bot: MultiverseBot) -> None:
                 "(`/tournament end-early`)"
             )
         lines = [
-            f"Drop {player.mention} from **{target.name}**? This is permanent: "
-            "they are never paired again; their played Matches still count and "
-            "they keep their place in Standings."
+            f"Drop {player.display_name} from **{target.name}**? This is "
+            "permanent: they are never paired again; their played Matches "
+            "still count and they keep their place in Standings."
         ]
         if any(
             player_id in (m.player_a, m.player_b)
@@ -1659,9 +1745,9 @@ def _install_commands(bot: MultiverseBot) -> None:
             else "their submitted Deck is discarded"
         )
         await interaction.response.send_message(
-            f"Unregister {player.mention} from **{target.name}**? They leave "
-            f"the sign-up list entirely ({deck_note}); signing up again while "
-            "registration is open starts fresh.",
+            f"Unregister {player.display_name} from **{target.name}**? They "
+            f"leave the sign-up list entirely ({deck_note}); signing up again "
+            "while registration is open starts fresh.",
             view=to_confirmation(
                 "unregister",
                 target.tournament_id,
@@ -1828,9 +1914,7 @@ def _install_commands(bot: MultiverseBot) -> None:
             bot.deck_images.delete_image(tournament_id, player_id)
         on_file = engine.deck(tournament_id, player_id, requested_by=player_id)
         suffix, files = bot.presented_deck(tournament_id, player_id, on_file)
-        message = (
-            f"Deck locked in for **{target.name}**, this message is only visible to you."
-        )
+        message = f"Deck locked in for **{target.name}**, this message is only visible to you."
         if interaction.response.is_done():
             await interaction.followup.send(message, files=files, ephemeral=True)
         else:
@@ -1868,10 +1952,12 @@ def _install_commands(bot: MultiverseBot) -> None:
         reporter = str(interaction.user.id)
         opponent = match.player_b if reporter == match.player_a else match.player_a
         assert opponent is not None
+        # Only the opponent is pinged below; the reporter and winner are
+        # named as text so they never render as raw tags (issue #34).
         outcome = (
             f"a **{format_score(games_won, games_lost, games_drawn)} draw**"
             if winner is None
-            else f"**{winner.mention} won "
+            else f"**{winner.display_name} won "
             f"{format_score(games_won, games_lost, games_drawn)}**"
         )
         view = discord.ui.View(timeout=None)
@@ -1886,7 +1972,7 @@ def _install_commands(bot: MultiverseBot) -> None:
                 )
             )
         await interaction.response.send_message(
-            f"{interaction.user.mention} reports {outcome}.\n"
+            f"{interaction.user.display_name} reports {outcome}.\n"
             f"<@{opponent}> — Confirm or Dispute below:",
             view=view,
             allowed_mentions=discord.AllowedMentions(
