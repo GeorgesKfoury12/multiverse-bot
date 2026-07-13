@@ -69,8 +69,10 @@ def resolve_tournament(
     needed: str,
 ) -> Tournament:
     """The Tournament a command targets: the explicit reference (ID or name)
-    if given, else the only Tournament in a phase the command applies to.
-    ``needed`` describes that phase for error messages ("open for signups")."""
+    if given, else the only Tournament in a phase the command applies to —
+    preferring non-completed ones, so a finished Tournament never blocks the
+    default. ``needed`` describes that phase for error messages ("open for
+    signups")."""
     tournaments = engine.tournaments()
     if reference is not None:
         matches = [t for t in tournaments if reference in (t.tournament_id, t.name)]
