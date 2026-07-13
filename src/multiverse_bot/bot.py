@@ -85,12 +85,18 @@ def resolve_tournament(
     candidates = [t for t in tournaments if t.phase in phases]
     if not candidates:
         raise CommandError(f"no Tournament is {needed} right now")
-    if len(candidates) > 1:
-        options = ", ".join(f"{t.tournament_id} ({t.name})" for t in candidates)
+    # Completed Tournaments accumulate forever, so where a command applies to
+    # them too (Decks are kept), they must never crowd out the one live
+    # Tournament a no-argument call means (issue #31). Archives are only
+    # defaulted to — or ambiguous — when nothing is live.
+    live = [t for t in candidates if t.phase != "completed"]
+    defaults = live or candidates
+    if len(defaults) > 1:
+        options = ", ".join(f"{t.tournament_id} ({t.name})" for t in defaults)
         raise CommandError(
             f"several Tournaments are {needed}; pass one explicitly: {options}"
         )
-    return candidates[0]
+    return defaults[0]
 
 
 def parse_score(score: str) -> tuple[int, int, int]:
@@ -1486,7 +1492,7 @@ def _install_commands(bot: MultiverseBot) -> None:
     ) -> None:
         """Ephemeral, so checking a Sealed Deck in a public channel does not
         Reveal it."""
-        target = resolve_tournament(engine, tournament, _HOLDING_DECKS, "underway")
+        target = resolve_tournament(engine, tournament, _HOLDING_DECKS, "holding Decks")
         try:
             deck = engine.deck_as_to(target.tournament_id, str(player.id))
         except EngineError:
