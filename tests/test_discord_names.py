@@ -99,5 +99,13 @@ def test_every_requested_player_resolves_once() -> None:
     assert names == {"7": "Alice", "8": "Bob"}
 
 
+def test_a_byes_missing_opponent_is_simply_absent() -> None:
+    guild = FakeGuild(members={7: _named("Alice")})
+
+    names = asyncio.run(player_names(FakeClient(), guild, ["7", None]))
+
+    assert names == {"7": "Alice"}
+
+
 def test_mention_names_render_mentions_and_skip_a_missing_opponent() -> None:
     assert mention_names("7", None) == {"7": "<@7>"}
