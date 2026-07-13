@@ -373,6 +373,42 @@ def unfinished_matches(
     )
 
 
+def round_thread_ids(
+    engine: TournamentEngine,
+    thread_for: Callable[[str], int | None],
+    tournament_id: str,
+    round_number: int,
+) -> list[int]:
+    """One Round's Match threads on file. Byes never had a thread and a crash
+    can leave a playable Match without one; both are simply absent."""
+    return [
+        thread_id
+        for match in engine.pairings(tournament_id, round_number)
+        if (thread_id := thread_for(match.match_id)) is not None
+    ]
+
+
+def tournament_thread_ids(
+    engine: TournamentEngine,
+    thread_for: Callable[[str], int | None],
+    tournament: Tournament,
+) -> list[int]:
+    """Every Match thread on file for the Tournament, across all its Rounds —
+    what the end-of-Tournament tidy archives and locks (issue #35). An early
+    end voids the current Round out of the engine, so its handler runs this
+    collection before ``end_tournament``, keeping the voided Round's threads
+    in the sweep."""
+    if tournament.current_round is None:
+        return []
+    return [
+        thread_id
+        for round_number in range(1, tournament.current_round + 1)
+        for thread_id in round_thread_ids(
+            engine, thread_for, tournament.tournament_id, round_number
+        )
+    ]
+
+
 def require_between_rounds(engine: TournamentEngine, tournament: Tournament) -> None:
     """End-early is offered only between Rounds (spec #1): refuse while the
     current Round has any result activity beyond its pre-confirmed Bye,
@@ -701,6 +737,28 @@ async def _delete_thread_created_notice(
         pass
 
 
+async def tidy_match_threads(
+    bot: MultiverseBot, thread_ids: Iterable[int], tidied: bool = True
+) -> None:
+    """Archive and lock Match threads once their Tournament ends, tidying
+    them out of the pairings channel's live thread list (issue #35). Archived
+    and locked, never deleted: threads hold the scheduling and dispute record
+    that day-later disputes are settled from. ``tidied=False`` undoes it for
+    a reopened final Round, whose corrections happen back in those threads —
+    locked ones would refuse the players and any TO without Manage Threads.
+
+    Best-effort, like the thread-created notice cleanup: a thread Discord
+    cannot produce or edit (deleted, missing permissions) is skipped, and a
+    failed tidy never blocks the announcements around it."""
+    for thread_id in thread_ids:
+        try:
+            thread = bot.get_channel(thread_id) or await bot.fetch_channel(thread_id)
+            if isinstance(thread, discord.Thread):
+                await thread.edit(archived=tidied, locked=tidied)
+        except discord.HTTPException:
+            continue
+
+
 async def announce_reveal(bot: MultiverseBot, tournament_id: str) -> None:
     """Post every Deck at once in the bound decklists channel — the Reveal
     (spec #1 stories 5, 29). One attributed post per player, no pings; the
@@ -771,7 +829,7 @@ async def advance_announcements(
     """After a confirmation lands: if it closed the Round, post Standings and
     then the next Round's Pairings, with no TO action needed (spec #1 stories
     21, 27); if it completed the Tournament, post final Standings and the
-    winner (story 28).
+    winner (story 28), then tidy the Match threads (issue #35).
 
     Shared seam for everything that confirms results: the confirm button now,
     the TO's corrections (ticket #12) later.
@@ -779,6 +837,12 @@ async def advance_announcements(
     tournament = bot.engine.tournament(tournament_id)
     if tournament.phase == "completed":
         await announce_standings(bot, tournament_id)
+        await tidy_match_threads(
+            bot,
+            tournament_thread_ids(
+                bot.engine, bot.bindings_store.match_thread, tournament
+            ),
+        )
     elif tournament.current_round != round_before:
         await announce_standings(bot, tournament_id)
         await announce_pairings(bot, tournament_id)
@@ -1239,11 +1303,26 @@ class TOConfirmButton(
             view=None,
         )
         if completed:
+            # The completion tidied every Match thread; corrections happen
+            # back in the reopened final Round's, so exactly those un-tidy —
+            # earlier Rounds stay archived (issue #35).
+            assert reopened is not None
+            await tidy_match_threads(
+                bot,
+                round_thread_ids(
+                    bot.engine,
+                    bot.bindings_store.match_thread,
+                    self.tournament_id,
+                    reopened,
+                ),
+                tidied=False,
+            )
             announcement = (
                 f"🔓 The TO reopened the final Round of **{tournament.name}** "
                 "to correct a result — the posted final Standings stop "
-                "counting. The Tournament completes again, with fresh final "
-                "Standings, when every result is confirmed."
+                "counting, and the final Round's Match threads are unlocked "
+                "for the correction. The Tournament completes again, with "
+                "fresh final Standings, when every result is confirmed."
             )
         else:
             announcement = (
@@ -1267,6 +1346,12 @@ class TOConfirmButton(
         tournament = self._in_progress_tournament(bot.engine)
         require_current_round(tournament, int(self.argument))
         voided = tournament.current_round
+        # Collected before the end voids the current Round out of the engine:
+        # the voided Round's threads are already open on Discord, so the tidy
+        # below must sweep them too.
+        threads = tournament_thread_ids(
+            bot.engine, bot.bindings_store.match_thread, tournament
+        )
         # The engine re-checks that the Round is untouched; a report that
         # landed since the preview refuses the end instead of voiding it.
         bot.engine.end_tournament(self.tournament_id)
@@ -1289,6 +1374,7 @@ class TOConfirmButton(
                 "A TO can re-post with `/tournament post-standings`.",
                 ephemeral=True,
             )
+        await tidy_match_threads(bot, threads)
 
 
 def to_confirmation(
@@ -1460,12 +1546,19 @@ def _install_commands(bot: MultiverseBot) -> None:
         """Recovery for a crash between a Round closing and its Standings
         landing: posts the current Standings again (final ones for a completed
         Tournament); pair with post-pairings if the next Round's posts are
-        missing too."""
+        missing too. For a completed Tournament it also re-runs the Match
+        thread tidy (issue #35), covering a crash mid-tidy — though not a
+        Round an early end already voided out of the engine."""
         target = resolve_tournament(
             engine, tournament, _RESULTED, "in progress or completed"
         )
         await interaction.response.defer()
         await announce_standings(bot, target.tournament_id)
+        if target.phase == "completed":
+            await tidy_match_threads(
+                bot,
+                tournament_thread_ids(engine, bot.bindings_store.match_thread, target),
+            )
         await interaction.followup.send(
             f"Standings for **{target.name}** are re-posted."
         )
