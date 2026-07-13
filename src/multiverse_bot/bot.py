@@ -672,7 +672,8 @@ async def announce_pairings(bot: MultiverseBot, tournament_id: str) -> None:
         )
         await thread.send(
             f"<@{match.player_a}> <@{match.player_b}> — Round {round_number}: "
-            "schedule and play your Match here, then report the result."
+            "schedule and play your Match here, then report the result "
+            "with `/report-score`."
         )
         bot.bindings_store.save_match_thread(match.match_id, thread.id)
         await _delete_thread_created_notice(channel, thread)
@@ -966,7 +967,7 @@ class PendingResultButton(
         await interaction.followup.send(
             f"<@&{bot.to_role_id}> — {interaction.user.display_name} disputed the "
             f"Reported Result in {where}. Sort it out there, then either "
-            "player can `/report` again — or the TO rules on it.",
+            "player can `/report-score` again — or the TO rules on it.",
             allowed_mentions=discord.AllowedMentions(
                 everyone=False,
                 roles=[discord.Object(bot.to_role_id)],
@@ -1545,7 +1546,7 @@ def _install_commands(bot: MultiverseBot) -> None:
     ) -> None:
         """The TO confirms a Pending or Disputed result as reported — ruling a
         Dispute in the reporter's favor, or unsticking an unresponsive
-        opponent (ticket #12). Used in the Match thread, like `/report`; the
+        opponent (ticket #12). Used in the Match thread, like `/report-score`; the
         Match ID reaches a Match with no thread."""
         target, match = open_match_by_reference(
             engine, bot.bindings_store, match_id, interaction.channel_id
@@ -1925,13 +1926,16 @@ def _install_commands(bot: MultiverseBot) -> None:
                 message, files=files, ephemeral=True
             )
 
-    @bot.tree.command(description="Report your Match result from its Match thread")
+    @bot.tree.command(
+        name="report-score",
+        description="Report your Match result from its Match thread",
+    )
     @app_commands.guild_only()
     @app_commands.describe(
         score="Game score, winner's count first: 2-0, 2-1, or 1-1-1 for a draw",
         winner="Who won the Match; leave empty for a draw",
     )
-    async def report(
+    async def report_score(
         interaction: discord.Interaction,
         score: str,
         winner: discord.Member | None = None,

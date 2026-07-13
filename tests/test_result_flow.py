@@ -387,6 +387,24 @@ def test_a_draw_report_must_carry_a_drawn_score() -> None:
             )
 
 
+def test_a_decisive_score_without_a_winner_says_how_to_fix_it() -> None:
+    """Reporting 2-1 with no winner is a fixable mistake, not a riddle: the
+    error names the fix — fill the winner field or report a draw (ticket #32)."""
+    engine = TournamentEngine()
+    tournament_id = start_four_player_tournament(engine)
+    first, _ = engine.pairings(tournament_id, round_number=1)
+
+    with pytest.raises(EngineError, match=r"pick who won in the winner field.*1-1-1"):
+        engine.report_result(
+            tournament_id,
+            first.match_id,
+            reported_by=first.player_a,
+            winner=None,
+            games_won=2,
+            games_lost=1,
+        )
+
+
 def test_history_records_who_did_what_in_order() -> None:
     engine = TournamentEngine()
     tournament_id = start_four_player_tournament(engine)
