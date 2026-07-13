@@ -19,6 +19,7 @@ from multiverse_bot.bot import (
     _TO_CONFIRM_TEMPLATE,
     CommandError,
     TOConfirmButton,
+    mention_names,
     open_match_by_reference,
     reopen_preview,
     require_between_rounds,
@@ -185,16 +186,29 @@ def _match(**overrides: object) -> Match:
     return Match(**{**defaults, **overrides})
 
 
+NAMES = {"alice": "Alice", "bob": "Bob", "carol": "Carol", "dave": "Dave"}
+
+
 def test_a_won_result_reads_as_winner_beat_loser() -> None:
     match = _match(winner="bob", games_won=2, games_lost=1, games_drawn=0)
 
-    assert result_phrase(match) == "<@bob> beat <@alice> 2-1"
+    assert result_phrase(match, NAMES) == "Bob beat Alice 2-1"
 
 
 def test_a_drawn_result_names_both_players() -> None:
     match = _match(winner=None, games_won=1, games_lost=1, games_drawn=1)
 
-    assert result_phrase(match) == "<@alice> and <@bob> drew 1-1-1"
+    assert result_phrase(match, NAMES) == "Alice and Bob drew 1-1-1"
+
+
+def test_a_ping_context_renders_the_result_in_mention_form() -> None:
+    """Where the message pings the players (a TO ruling), the mention is in
+    the mention data and always renders — so it stays the display form."""
+    match = _match(winner="bob", games_won=2, games_lost=1, games_drawn=0)
+
+    phrase = result_phrase(match, mention_names(match.player_a, match.player_b))
+
+    assert phrase == "<@bob> beat <@alice> 2-1"
 
 
 def test_walk_through_lines_show_each_matchs_thread_and_where_it_stands() -> None:
@@ -212,12 +226,12 @@ def test_walk_through_lines_show_each_matchs_thread_and_where_it_stands() -> Non
         reported_by="dave",
     )
 
-    lines = unfinished_match_lines([unreported, pending], threads.get)
+    lines = unfinished_match_lines([unreported, pending], threads.get, NAMES)
 
-    assert lines[0] == "- <@alice> vs <@bob> in <#555> — no report yet"
+    assert lines[0] == "- Alice vs Bob in <#555> — no report yet"
     # No thread on file: the Match ID stands in so the line still says where.
     assert "T1-R1-M2" in lines[1]
-    assert "Pending — <@carol> beat <@dave> 2-0, per <@dave>" in lines[1]
+    assert "Pending — Carol beat Dave 2-0, per Dave" in lines[1]
 
 
 def test_a_disputed_match_is_flagged_in_the_walk_through() -> None:
@@ -230,9 +244,9 @@ def test_a_disputed_match_is_flagged_in_the_walk_through() -> None:
         reported_by="alice",
     )
 
-    (line,) = unfinished_match_lines([disputed], {"T1-R1-M1": 9}.get)
+    (line,) = unfinished_match_lines([disputed], {"T1-R1-M1": 9}.get, NAMES)
 
-    assert "Disputed — <@alice> beat <@bob> 2-1, per <@alice>" in line
+    assert "Disputed — Alice beat Bob 2-1, per Alice" in line
 
 
 # -- previewing a reopen ---------------------------------------------------------
